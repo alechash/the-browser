@@ -189,10 +189,6 @@ private struct SplitDivider: View {
 
     @State private var isDragging = false
     @State private var previousTranslation: CGFloat = 0
-#if os(macOS)
-    @State private var hostingWindow: NSWindow?
-    @State private var previousWindowMovableState: Bool?
-#endif
 
     var body: some View {
         ZStack {
@@ -221,20 +217,12 @@ private struct SplitDivider: View {
         }
         .contentShape(Rectangle())
 #if os(macOS)
-        .background(WindowAccessor(window: $hostingWindow))
+        .background(NonDraggableView())
 #endif
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
                     guard totalLength > 0 else { return }
-#if os(macOS)
-                    if previousWindowMovableState == nil {
-                        let targetWindow = hostingWindow ?? NSApp.keyWindow
-                        previousWindowMovableState = targetWindow?.isMovableByWindowBackground
-                        targetWindow?.isMovableByWindowBackground = false
-                        hostingWindow = targetWindow ?? hostingWindow
-                    }
-#endif
                     isDragging = true
                     let translation = orientation == .horizontal ? value.translation.width : value.translation.height
                     let delta = translation - previousTranslation
@@ -244,36 +232,22 @@ private struct SplitDivider: View {
                 .onEnded { _ in
                     isDragging = false
                     previousTranslation = 0
-#if os(macOS)
-                    if let previousWindowMovableState {
-                        hostingWindow?.isMovableByWindowBackground = previousWindowMovableState
-                    } else {
-                        hostingWindow?.isMovableByWindowBackground = true
-                    }
-                    previousWindowMovableState = nil
-#endif
                 }
         )
     }
 }
 
 #if os(macOS)
-private struct WindowAccessor: NSViewRepresentable {
-    @Binding var window: NSWindow?
-
+private struct NonDraggableView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            self.window = view.window
-        }
-        return view
+        NonDraggableNSView()
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            self.window = nsView.window
-        }
-    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class NonDraggableNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
 }
 #endif
 
