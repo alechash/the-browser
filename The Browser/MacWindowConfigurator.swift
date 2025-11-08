@@ -25,6 +25,7 @@ struct MacWindowConfigurator: NSViewRepresentable {
     final class Coordinator: NSObject, NSWindowDelegate {
         private weak var window: NSWindow?
         private var observers: [NSObjectProtocol] = []
+        private var didSetInitialFrame = false
 
         deinit {
             removeObservers()
@@ -82,6 +83,13 @@ struct MacWindowConfigurator: NSViewRepresentable {
             window.isMovableByWindowBackground = true
             window.title = ""
             window.toolbar = nil
+
+            if !didSetInitialFrame {
+                didSetInitialFrame = true
+                if let screen = window.screen ?? NSScreen.main {
+                    window.setFrame(screen.visibleFrame, display: true)
+                }
+            }
 
             if let titlebarContainer = window.contentView?.superview?.subviews.first(where: { String(describing: type(of: $0)).contains("NSTitlebar") }) {
                 titlebarContainer.isHidden = true
