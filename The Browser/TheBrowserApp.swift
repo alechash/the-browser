@@ -49,7 +49,7 @@ struct BrowserView: View {
             header
 
             VStack(alignment: .leading, spacing: 12) {
-                navigationButtons
+                navigationControls
                 addressField
 
                 if viewModel.shouldShowProgress {
@@ -134,36 +134,37 @@ struct BrowserView: View {
         }
     }
 
-    private var navigationButtons: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SidebarButton(
+    private var navigationControls: some View {
+        HStack(spacing: 8) {
+            NavigationControlButton(
                 symbol: "chevron.left",
-                title: "Back",
+                help: "Back",
                 isEnabled: viewModel.canGoBack,
                 action: viewModel.goBack
             )
 
-            SidebarButton(
+            NavigationControlButton(
                 symbol: "chevron.right",
-                title: "Forward",
+                help: "Forward",
                 isEnabled: viewModel.canGoForward,
                 action: viewModel.goForward
             )
 
-            SidebarButton(
+            NavigationControlButton(
                 symbol: viewModel.isLoading ? "xmark" : "arrow.clockwise",
-                title: viewModel.isLoading ? "Stop" : "Reload",
+                help: viewModel.isLoading ? "Stop" : "Reload",
                 isEnabled: viewModel.currentTabExists,
                 action: viewModel.reloadOrStop
             )
 
-            SidebarButton(
-                symbol: "bookmark",
-                title: "Home",
+            NavigationControlButton(
+                symbol: "house",
+                help: "Home",
                 isEnabled: viewModel.currentTabExists,
                 action: viewModel.goHome
             )
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var addressField: some View {
@@ -201,38 +202,35 @@ struct BrowserView: View {
     }
 }
 
-private struct SidebarButton: View {
+private struct NavigationControlButton: View {
     let symbol: String
-    let title: String
+    let help: String
     let isEnabled: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 32, height: 32)
-                    .background(
-                        Circle()
-                            .fill(Color.browserControlBackground)
-                    )
-
-                Text(title)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.primary)
-            }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.browserSidebarButtonBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 34, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.browserControlBackground)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.browserControlBorder, lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
+        .accessibilityLabel(Text(help))
+        #if os(macOS)
+        .help(help)
+        #endif
     }
 }
 
@@ -494,11 +492,22 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard let id = selectedTabID, let webView = webViews[id] else { return }
 #if os(macOS)
         webView.configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        if webView.responds(to: Selector(("_toggleInspector:"))) {
-            webView.perform(Selector(("_toggleInspector:")))
-        } else {
-            webView.evaluateJavaScript("debugger;")
+        let inspectorSelectors = [
+            "toggleInspector:",
+            "_toggleInspector:",
+            "showInspector:",
+            "_showInspector:"
+        ]
+
+        for selectorName in inspectorSelectors {
+            let selector = NSSelectorFromString(selectorName)
+            if webView.responds(to: selector) {
+                webView.perform(selector, with: nil)
+                return
+            }
         }
+
+        webView.evaluateJavaScript("debugger;")
 #else
         webView.evaluateJavaScript("debugger;")
 #endif
@@ -742,6 +751,14 @@ private extension Color {
         Color(nsColor: .underPageBackgroundColor)
 #else
         Color(.secondarySystemBackground)
+#endif
+    }
+
+    static var browserControlBorder: Color {
+#if os(macOS)
+        Color(nsColor: .separatorColor).opacity(0.25)
+#else
+        Color(.separator).opacity(0.25)
 #endif
     }
 
