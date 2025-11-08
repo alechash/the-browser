@@ -564,19 +564,57 @@ private struct WindowControlButton: View {
 }
 
 private struct MacWindowConfigurator: NSViewRepresentable {
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        configureIfPossible(view)
+        configureIfPossible(view, context: context)
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        configureIfPossible(nsView)
+        configureIfPossible(nsView, context: context)
     }
 
-    private func configureIfPossible(_ view: NSView) {
+    private func configureIfPossible(_ view: NSView, context: Context) {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
+            context.coordinator.configure(window: window)
+        }
+    }
+
+    final class Coordinator {
+        private weak var window: NSWindow?
+        private var observers: [NSObjectProtocol] = []
+
+        deinit {
+            removeObservers()
+        }
+
+        func configure(window: NSWindow) {
+            applyConfiguration(to: window)
+
+            if self.window !== window {
+                removeObservers()
+                self.window = window
+
+                let notificationNames: [Notification.Name] = [
+                    NSWindow.didBecomeKeyNotification,
+                    NSWindow.didDeminiaturizeNotification,
+                    NSWindow.didExitFullScreenNotification,
+                    NSWindow.didResizeNotification
+                ]
+
+                observers = notificationNames.map { name in
+                    NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                        guard let self, let window = self.window else { return }
+                        self.applyConfiguration(to: window)
+                    }
+                }
+            }
+        }
+
+        private func applyConfiguration(to window: NSWindow) {
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.styleMask.insert(.fullSizeContentView)
@@ -584,6 +622,11 @@ private struct MacWindowConfigurator: NSViewRepresentable {
             window.standardWindowButton(.miniaturizeButton)?.isHidden = true
             window.standardWindowButton(.zoomButton)?.isHidden = true
             window.isMovableByWindowBackground = true
+        }
+
+        private func removeObservers() {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
         }
     }
 }
