@@ -168,6 +168,29 @@ final class BrowserViewModel: NSObject, ObservableObject {
         openNewTab(with: homeURL)
     }
 
+    func handleIncomingURL(_ url: URL) {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
+
+#if os(macOS)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+#endif
+
+        hasLoadedInitialPage = true
+
+        if tabs.isEmpty {
+            openNewTab(with: url)
+            return
+        }
+
+        if let selectedTabID,
+           let index = tabs.firstIndex(where: { $0.id == selectedTabID }),
+           tabs[index].kind != .web {
+            load(url: url, in: selectedTabID)
+        } else {
+            openNewTab(with: url)
+        }
+    }
+
     func openNewTab() {
         openNewTab(with: homeURL)
     }

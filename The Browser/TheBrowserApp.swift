@@ -7,6 +7,7 @@ struct TheBrowserApp: App {
             BrowserView()
         }
 #if os(macOS)
+        .handlesExternalEvents(matching: ["*"])
         .commands {
             BrowserCommands()
         }

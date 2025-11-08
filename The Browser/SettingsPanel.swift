@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 #if os(macOS)
 import AppKit
 #else
@@ -9,6 +10,9 @@ struct SettingsPanel: View {
     @ObservedObject var settings: BrowserSettings
     @Environment(\.dismiss) private var dismiss
 
+#if os(macOS)
+    @StateObject private var defaultBrowserManager = DefaultBrowserManager()
+#endif
     @State private var homePageDraft: String
     @State private var validationMessage: String?
     @State private var customSearchName: String = ""
@@ -82,6 +86,9 @@ struct SettingsPanel: View {
         VStack(alignment: .leading, spacing: 28) {
             switch section {
             case .general:
+#if os(macOS)
+                defaultBrowserCard
+#endif
                 homePageCard
             case .search:
                 defaultSearchCard
@@ -89,6 +96,70 @@ struct SettingsPanel: View {
             }
         }
     }
+
+#if os(macOS)
+    private var defaultBrowserCard: some View {
+        SettingsCard(
+            title: "Default Browser",
+            subtitle: "Decide which app should open links from other applications.",
+            icon: "globe"
+        ) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: defaultBrowserManager.isDefaultHandler ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(defaultBrowserManager.isDefaultHandler ? Color.green : Color.yellow)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(defaultBrowserStatusTitle)
+                            .font(.headline)
+
+                        Text(defaultBrowserStatusDetail)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Button("Set as Default Browser") {
+                    defaultBrowserManager.setAsDefaultBrowser()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(defaultBrowserManager.isDefaultHandler)
+
+                if let error = defaultBrowserManager.lastErrorMessage, !error.isEmpty {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+            .onAppear(perform: defaultBrowserManager.refresh)
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                defaultBrowserManager.refresh()
+            }
+        }
+    }
+
+    private var defaultBrowserStatusTitle: String {
+        if defaultBrowserManager.isDefaultHandler {
+            return "The Browser opens web links by default."
+        }
+
+        if let name = defaultBrowserManager.currentHandlerName {
+            return "Currently handled by \(name)."
+        }
+
+        return "No default browser is set."
+    }
+
+    private var defaultBrowserStatusDetail: String {
+        if defaultBrowserManager.isDefaultHandler {
+            return "HTTP and HTTPS links from other apps will launch here automatically."
+        }
+
+        return "Choose The Browser to handle HTTP and HTTPS links without leaving your workspace."
+    }
+#endif
 
     private var homePageCard: some View {
         SettingsCard(
