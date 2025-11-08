@@ -38,6 +38,9 @@ struct BrowserView: View {
                 .background(Color.browserBackground)
         }
         .background(Color.browserBackground)
+#if os(macOS)
+        .background(MacWindowConfigurator())
+#endif
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .onAppear {
             viewModel.loadInitialPageIfNeeded()
@@ -51,12 +54,6 @@ struct BrowserView: View {
             VStack(alignment: .leading, spacing: 12) {
                 navigationControls
                 addressField
-
-                if viewModel.shouldShowProgress {
-                    ProgressView(value: viewModel.progress)
-                        .progressViewStyle(.linear)
-                        .tint(.blue)
-                }
             }
 
             Divider()
@@ -113,23 +110,29 @@ struct BrowserView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 18, weight: .heavy))
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .background(
-                    Circle()
-                        .fill(Color.browserAccent)
-                )
+        VStack(alignment: .leading, spacing: 16) {
+#if os(macOS)
+            WindowControls()
+#endif
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("The Browser")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                Text("Workspace")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(
+                        Circle()
+                            .fill(Color.browserAccent)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("The Browser")
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                    Text("Workspace")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -188,6 +191,20 @@ struct BrowserView: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(Color.browserControlBackground)
             )
+            .overlay(alignment: .bottomLeading) {
+                if viewModel.shouldShowProgress {
+                    GeometryReader { geometry in
+                        Rectangle()
+                            .fill(Color.browserAccent)
+                            .frame(
+                                width: geometry.size.width * max(viewModel.progress, 0),
+                                height: 3
+                            )
+                    }
+                    .frame(height: 3)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
             .onSubmit {
                 viewModel.submitAddress()
                 isAddressFocused = false
@@ -233,6 +250,98 @@ private struct NavigationControlButton: View {
         #endif
     }
 }
+
+#if os(macOS)
+private struct WindowControls: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            WindowControlButton(role: .close)
+            WindowControlButton(role: .minimize)
+            WindowControlButton(role: .zoom)
+        }
+    }
+}
+
+private struct WindowControlButton: View {
+    enum Role {
+        case close
+        case minimize
+        case zoom
+
+        var color: Color {
+            switch self {
+            case .close:
+                return Color(red: 1.0, green: 0.36, blue: 0.35)
+            case .minimize:
+                return Color(red: 1.0, green: 0.8, blue: 0.22)
+            case .zoom:
+                return Color(red: 0.4, green: 0.85, blue: 0.38)
+            }
+        }
+    }
+
+    let role: Role
+
+    var body: some View {
+        Button(action: performAction) {
+            Circle()
+                .fill(role.color)
+                .frame(width: 14, height: 14)
+                .overlay(
+                    Circle()
+                        .stroke(Color.black.opacity(0.12), lineWidth: 0.5)
+                )
+                .accessibilityLabel(Text(accessibilityLabel))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var accessibilityLabel: String {
+        switch role {
+        case .close: return "Close window"
+        case .minimize: return "Minimize window"
+        case .zoom: return "Zoom window"
+        }
+    }
+
+    private func performAction() {
+        guard let window = NSApp.keyWindow else { return }
+        switch role {
+        case .close:
+            window.performClose(nil)
+        case .minimize:
+            window.miniaturize(nil)
+        case .zoom:
+            window.zoom(nil)
+        }
+    }
+}
+
+private struct MacWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        configureIfPossible(view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        configureIfPossible(nsView)
+    }
+
+    private func configureIfPossible(_ view: NSView) {
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.styleMask.insert(.fullSizeContentView)
+            window.standardWindowButton(.closeButton)?.isHidden = true
+            window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+            window.standardWindowButton(.zoomButton)?.isHidden = true
+            window.isMovableByWindowBackground = true
+        }
+    }
+}
+#endif
 
 private struct TabRow: View {
     let tab: BrowserViewModel.TabState
