@@ -18,9 +18,14 @@ import AppKit
 @main
 struct TheBrowserApp: App {
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "browser") {
             BrowserView()
         }
+#if os(macOS)
+        .commands {
+            BrowserCommands()
+        }
+#endif
     }
 }
 
@@ -83,6 +88,9 @@ struct BrowserView: View {
         .onAppear {
             viewModel.loadInitialPageIfNeeded()
         }
+#if os(macOS)
+        .focusedSceneValue(\.browserActions, commandContext)
+#endif
         .sheet(isPresented: $isShowingSettings) {
             SettingsPanel(settings: settings)
         }
@@ -160,6 +168,40 @@ struct BrowserView: View {
         }
         .padding(16)
     }
+
+#if os(macOS)
+    private var commandContext: BrowserCommandContext {
+        BrowserCommandContext(
+            openNewTab: viewModel.openNewTab,
+            closeCurrentTab: viewModel.closeCurrentTab,
+            reopenLastClosedTab: viewModel.reopenLastClosedTab,
+            selectNextTab: viewModel.selectNextTab,
+            selectPreviousTab: viewModel.selectPreviousTab,
+            reload: viewModel.reloadCurrentTab,
+            focusAddressBar: {
+                if isWebContentFullscreen {
+                    withAnimation {
+                        isWebContentFullscreen = false
+                    }
+                }
+                isAddressFocused = true
+            },
+            findOnPage: viewModel.findInPage,
+            zoomIn: viewModel.zoomIn,
+            zoomOut: viewModel.zoomOut,
+            resetZoom: viewModel.resetZoom,
+            toggleContentFullscreen: {
+                withAnimation {
+                    isWebContentFullscreen.toggle()
+                }
+            },
+            canSelectNextTab: viewModel.hasMultipleTabs,
+            canSelectPreviousTab: viewModel.hasMultipleTabs,
+            canReopenLastClosedTab: viewModel.canReopenLastClosedTab,
+            hasActiveTab: viewModel.currentTabExists
+        )
+    }
+#endif
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -277,6 +319,151 @@ struct BrowserView: View {
         }
     }
 }
+
+#if os(macOS)
+private struct BrowserCommandContext {
+    let openNewTab: () -> Void
+    let closeCurrentTab: () -> Void
+    let reopenLastClosedTab: () -> Void
+    let selectNextTab: () -> Void
+    let selectPreviousTab: () -> Void
+    let reload: () -> Void
+    let focusAddressBar: () -> Void
+    let findOnPage: () -> Void
+    let zoomIn: () -> Void
+    let zoomOut: () -> Void
+    let resetZoom: () -> Void
+    let toggleContentFullscreen: () -> Void
+    let canSelectNextTab: Bool
+    let canSelectPreviousTab: Bool
+    let canReopenLastClosedTab: Bool
+    let hasActiveTab: Bool
+}
+
+private struct BrowserActionsKey: FocusedValueKey {
+    typealias Value = BrowserCommandContext
+}
+
+private extension FocusedValues {
+    var browserActions: BrowserCommandContext? {
+        get { self[BrowserActionsKey.self] }
+        set { self[BrowserActionsKey.self] = newValue }
+    }
+}
+
+struct BrowserCommands: Commands {
+    @FocusedValue(\.browserActions) private var actions
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New Window") {
+                openNewWindow()
+            }
+            .keyboardShortcut("n", modifiers: .command)
+
+            Button("New Tab") {
+                actions?.openNewTab()
+            }
+            .keyboardShortcut("t", modifiers: .command)
+            .disabled(actions == nil)
+        }
+
+        CommandMenu("Tabs") {
+            Button("Close Tab") {
+                actions?.closeCurrentTab()
+            }
+            .keyboardShortcut("w", modifiers: .command)
+            .disabled(actions == nil || actions?.hasActiveTab == false)
+
+            Button("Reopen Last Closed Tab") {
+                actions?.reopenLastClosedTab()
+            }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .disabled(actions?.canReopenLastClosedTab != true)
+
+            Button("Next Tab") {
+                actions?.selectNextTab()
+            }
+            .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+            .disabled(actions?.canSelectNextTab != true)
+
+            Button("Previous Tab") {
+                actions?.selectPreviousTab()
+            }
+            .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+            .disabled(actions?.canSelectPreviousTab != true)
+        }
+
+        CommandMenu("View") {
+            Button("Reload Page") {
+                actions?.reload()
+            }
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(actions?.hasActiveTab != true)
+
+            Divider()
+
+            Button("Zoom In") {
+                actions?.zoomIn()
+            }
+            .keyboardShortcut("+", modifiers: .command)
+            .disabled(actions?.hasActiveTab != true)
+
+            Button("Zoom Out") {
+                actions?.zoomOut()
+            }
+            .keyboardShortcut("-", modifiers: .command)
+            .disabled(actions?.hasActiveTab != true)
+
+            Button("Actual Size") {
+                actions?.resetZoom()
+            }
+            .keyboardShortcut("0", modifiers: .command)
+            .disabled(actions?.hasActiveTab != true)
+
+            Divider()
+
+            Button("Toggle Sidebar Fullscreen") {
+                actions?.toggleContentFullscreen()
+            }
+            .keyboardShortcut("f", modifiers: [.command, .control])
+        }
+
+        CommandMenu("Navigate") {
+            Button("Focus Address Bar") {
+                actions?.focusAddressBar()
+            }
+            .keyboardShortcut("l", modifiers: .command)
+
+            Button("Find on Page") {
+                actions?.findOnPage()
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(actions?.hasActiveTab != true)
+        }
+    }
+
+    private func openNewWindow() {
+        if #available(macOS 13.0, *) {
+            openWindow(id: "browser")
+        } else {
+            guard let app = NSApp else { return }
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.center()
+            window.contentView = NSHostingView(rootView: BrowserView())
+            window.makeKeyAndOrderFront(nil)
+            app.activate(ignoringOtherApps: true)
+        }
+    }
+}
+#endif
 
 private struct NavigationControlButton: View {
     let symbol: String
@@ -663,6 +850,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
         var currentURL: URL?
     }
 
+    private struct ClosedTabSnapshot {
+        let title: String
+        let addressBarText: String
+        let url: URL?
+    }
+
     @Published private(set) var tabs: [TabState]
     @Published var selectedTabID: UUID?
 
@@ -699,12 +892,21 @@ final class BrowserViewModel: NSObject, ObservableObject {
         currentTab != nil
     }
 
+    var hasMultipleTabs: Bool {
+        tabs.count > 1
+    }
+
+    var canReopenLastClosedTab: Bool {
+        !closedTabHistory.isEmpty
+    }
+
     private let settings: BrowserSettings
     private var hasLoadedInitialPage = false
     private var webViews: [UUID: WKWebView]
     private var webViewToTabID: [ObjectIdentifier: UUID]
     private var progressObservations: [UUID: NSKeyValueObservation]
     private var pendingURLs: [UUID: URL]
+    private var closedTabHistory: [ClosedTabSnapshot]
 
     init(settings: BrowserSettings) {
         self.settings = settings
@@ -713,6 +915,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.webViewToTabID = [:]
         self.progressObservations = [:]
         self.pendingURLs = [:]
+        self.closedTabHistory = []
         super.init()
     }
 
@@ -757,6 +960,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     func closeTab(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let tab = tabs[index]
+        recordClosedTab(for: id, tab: tab)
         tabs.remove(at: index)
         cleanupWebView(for: id)
 
@@ -770,6 +975,57 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
         if tabs.isEmpty {
             openNewTab()
+        }
+    }
+
+    func closeCurrentTab() {
+        guard let id = selectedTabID else { return }
+        closeTab(id)
+    }
+
+    func reopenLastClosedTab() {
+        guard let snapshot = closedTabHistory.popLast() else { return }
+
+        let tabID = UUID()
+        let targetURL = snapshot.url ?? homeURL
+        let addressText = snapshot.addressBarText.isEmpty ? targetURL.absoluteString : snapshot.addressBarText
+        let title = snapshot.title.isEmpty ? "New Tab" : snapshot.title
+
+        let restoredTab = TabState(
+            id: tabID,
+            title: title,
+            addressBarText: addressText,
+            canGoBack: false,
+            canGoForward: false,
+            isLoading: false,
+            progress: 0,
+            currentURL: snapshot.url
+        )
+
+        tabs.append(restoredTab)
+        selectedTabID = tabID
+        pendingURLs[tabID] = targetURL
+        _ = makeConfiguredWebView(for: tabID)
+        attemptToLoadPendingURL(for: tabID)
+    }
+
+    func selectNextTab() {
+        guard hasMultipleTabs, let id = selectedTabID, let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let nextIndex = tabs.index(after: index)
+        if nextIndex < tabs.endIndex {
+            selectedTabID = tabs[nextIndex].id
+        } else {
+            selectedTabID = tabs.first?.id
+        }
+    }
+
+    func selectPreviousTab() {
+        guard hasMultipleTabs, let id = selectedTabID, let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if index == tabs.startIndex {
+            selectedTabID = tabs.last?.id
+        } else {
+            let previousIndex = tabs.index(before: index)
+            selectedTabID = tabs[previousIndex].id
         }
     }
 
@@ -800,6 +1056,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
         tabs[index].currentURL = url
         pendingURLs[id] = url
         attemptToLoadPendingURL(for: id)
+    }
+
+    func reloadCurrentTab() {
+        guard let webView = currentWebView else { return }
+        webView.reload()
     }
 
     func reloadOrStop() {
@@ -864,9 +1125,42 @@ final class BrowserViewModel: NSObject, ObservableObject {
 #endif
     }
 
+    func findInPage() {
+        guard let webView = currentWebView else { return }
+#if os(macOS)
+        webView.performTextFinderAction(.showFindInterface)
+#endif
+    }
+
+    func zoomIn() {
+#if os(macOS)
+        adjustZoom(by: 0.1)
+#endif
+    }
+
+    func zoomOut() {
+#if os(macOS)
+        adjustZoom(by: -0.1)
+#endif
+    }
+
+    func resetZoom() {
+#if os(macOS)
+        guard let webView = currentWebView else { return }
+        if webView.magnification != 1.0 {
+            webView.setMagnification(1.0, centeredAt: CGPoint(x: webView.bounds.midX, y: webView.bounds.midY))
+        }
+#endif
+    }
+
     private var currentTab: TabState? {
         guard let id = selectedTabID else { return nil }
         return tabs.first(where: { $0.id == id })
+    }
+
+    private var currentWebView: WKWebView? {
+        guard let id = selectedTabID else { return nil }
+        return webViews[id]
     }
 
     private var homeURL: URL { settings.homePageURL }
@@ -912,6 +1206,28 @@ final class BrowserViewModel: NSObject, ObservableObject {
         webView.load(URLRequest(url: url))
     }
 
+    private func recordClosedTab(for tabID: UUID, tab: TabState) {
+        let url: URL?
+        if let webViewURL = webViews[tabID]?.url {
+            url = webViewURL
+        } else if let currentURL = tab.currentURL {
+            url = currentURL
+        } else {
+            url = BrowserViewModel.url(from: tab.addressBarText)
+        }
+
+        let snapshot = ClosedTabSnapshot(
+            title: tab.title,
+            addressBarText: tab.addressBarText,
+            url: url
+        )
+
+        closedTabHistory.append(snapshot)
+        if closedTabHistory.count > 20 {
+            closedTabHistory.removeFirst(closedTabHistory.count - 20)
+        }
+    }
+
     private func cleanupWebView(for tabID: UUID) {
         if let observation = progressObservations.removeValue(forKey: tabID) {
             observation.invalidate()
@@ -934,6 +1250,14 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard let tabID = tabID(for: webView), let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         tabs[index].progress = value
     }
+
+#if os(macOS)
+    private func adjustZoom(by delta: CGFloat) {
+        guard let webView = currentWebView else { return }
+        let newMagnification = max(0.5, min(3.0, webView.magnification + delta))
+        webView.setMagnification(newMagnification, centeredAt: CGPoint(x: webView.bounds.midX, y: webView.bounds.midY))
+    }
+#endif
 }
 
 private extension BrowserViewModel.TabState {
