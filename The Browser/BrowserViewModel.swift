@@ -331,7 +331,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
             _ = webView.becomeFirstResponder()
         }
 
-        webView.performTextFinderAction(.showFindInterface)
+        //webView.performTextFinderAction(.showFindInterface)
 #endif
     }
 

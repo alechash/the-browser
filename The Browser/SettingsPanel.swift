@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct SettingsPanel: View {
     @ObservedObject var settings: BrowserSettings

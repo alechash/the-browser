@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 final class BrowserSettings: ObservableObject {
     enum SearchEngine: String, CaseIterable, Identifiable {

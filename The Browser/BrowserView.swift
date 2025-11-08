@@ -114,7 +114,7 @@ struct BrowserView: View {
 private struct BrowserSidebar: View {
     @ObservedObject var viewModel: BrowserViewModel
     let appearance: BrowserSidebarAppearance
-    @Binding var isAddressFocused: Bool
+    var isAddressFocused: FocusState<Bool>.Binding
     @Binding var isShowingSettings: Bool
     let enterFullscreen: () -> Void
 
@@ -242,7 +242,7 @@ private struct BrowserSidebar: View {
                     set: { viewModel.updateAddressText($0) }
                 )
             )
-            .focused($isAddressFocused)
+            .focused(isAddressFocused)
             .textFieldStyle(.plain)
             .foregroundColor(appearance.primary)
             .padding(.vertical, 12)
@@ -263,7 +263,7 @@ private struct BrowserSidebar: View {
             .tint(appearance.primary)
             .onSubmit {
                 viewModel.submitAddress()
-                isAddressFocused = false
+                isAddressFocused.wrappedValue = false
             }
 #if os(iOS)
             .textInputAutocapitalization(.never)
