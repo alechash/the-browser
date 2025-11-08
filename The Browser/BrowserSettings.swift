@@ -77,29 +77,43 @@ final class BrowserSettings: ObservableObject {
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
 
+        // Stage custom search engines without using self
+        let loadedCustomEngines: [SearchEngine]
         if let data = userDefaults.data(forKey: Keys.customSearchEngines),
            let decoded = try? JSONDecoder().decode([SearchEngine].self, from: data) {
-            self.customSearchEngines = decoded
+            loadedCustomEngines = decoded
         } else {
-            self.customSearchEngines = []
+            loadedCustomEngines = []
         }
 
-        self.availableSearchEngines = SearchEngine.builtIn + customSearchEngines
+        // Stage available engines
+        let stagedAvailable = SearchEngine.builtIn + loadedCustomEngines
 
+        // Stage default search engine id
+        let stagedDefaultID: String
         if let storedID = userDefaults.string(forKey: Keys.searchEngine),
-           availableSearchEngines.contains(where: { $0.id == storedID }) {
-            self.defaultSearchEngineID = storedID
+           stagedAvailable.contains(where: { $0.id == storedID }) {
+            stagedDefaultID = storedID
         } else {
-            self.defaultSearchEngineID = SearchEngine.defaultID
-            userDefaults.set(self.defaultSearchEngineID, forKey: Keys.searchEngine)
+            stagedDefaultID = SearchEngine.defaultID
+            userDefaults.set(stagedDefaultID, forKey: Keys.searchEngine)
         }
 
+        // Stage home page
+        let stagedHome: String
         if let storedHome = userDefaults.string(forKey: Keys.homePage) {
-            self.homePage = storedHome
+            stagedHome = storedHome
         } else {
-            self.homePage = ""
+            stagedHome = ""
         }
 
+        // Now assign to stored properties in a safe order
+        self.customSearchEngines = loadedCustomEngines
+        self.availableSearchEngines = stagedAvailable
+        self.defaultSearchEngineID = stagedDefaultID
+        self.homePage = stagedHome
+
+        // Ensure consistency in case of later mutations
         refreshAvailableSearchEngines()
     }
 

@@ -79,6 +79,7 @@ struct BrowserView: View {
 #endif
         .sheet(isPresented: $isShowingSettings) {
             SettingsPanel(settings: settings)
+                .frame(width: 600, height:600)
         }
     }
 
