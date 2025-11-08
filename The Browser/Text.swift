@@ -29,7 +29,7 @@ struct BrowserView: View {
     var body: some View {
         VStack(spacing: 0) {
             addressBar
-            BrowserWebView(webView: viewModel.webView)
+            BrowserWebView(viewModel: viewModel)
                 .background(Color.browserBackground)
             toolbar
         }
@@ -152,33 +152,18 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published var progress: Double = 0
     @Published var currentURL: URL?
 
-    let webView: WKWebView
-
     private let homeURL: URL
     private var hasLoadedInitialPage = false
+    private var pendingURLToLoad: URL?
     private var progressObservation: NSKeyValueObservation?
+    private weak var webView: WKWebView?
 
     override init() {
-        let configuration = WKWebViewConfiguration()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-
-        self.webView = WKWebView(frame: .zero, configuration: configuration)
         self.homeURL = URL(string: "https://www.apple.com")!
         self.addressBarText = homeURL.absoluteString
         self.currentURL = homeURL
 
         super.init()
-
-        webView.navigationDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
-
-        progressObservation = webView.observe(\.estimatedProgress, options: .new) { [weak self] webView, _ in
-            guard let self else { return }
-            Task { @MainActor in
-                progress = webView.estimatedProgress
-            }
-        }
     }
 
     deinit {
@@ -213,10 +198,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
         addressBarText = url.absoluteString
         progress = 0
         currentURL = url
-        webView.load(URLRequest(url: url))
+        pendingURLToLoad = url
+        attemptToLoadPendingURL()
     }
 
     func reloadOrStop() {
+        guard let webView else { return }
         if isLoading {
             webView.stopLoading()
         } else {
@@ -225,11 +212,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     func goBack() {
-        webView.goBack()
+        webView?.goBack()
     }
 
     func goForward() {
-        webView.goForward()
+        webView?.goForward()
     }
 
     func goHome() {
@@ -300,9 +287,11 @@ extension BrowserViewModel: WKNavigationDelegate {
 
     private func updateNavigationState(isLoading: Bool) {
         self.isLoading = isLoading
-        canGoBack = webView.canGoBack
-        canGoForward = webView.canGoForward
-        currentURL = webView.url ?? currentURL
+        if let webView {
+            canGoBack = webView.canGoBack
+            canGoForward = webView.canGoForward
+            currentURL = webView.url ?? currentURL
+        }
         if !isLoading {
             progress = 1
         }
@@ -311,25 +300,75 @@ extension BrowserViewModel: WKNavigationDelegate {
 
 #if os(macOS)
 struct BrowserWebView: NSViewRepresentable {
-    let webView: WKWebView
+    @ObservedObject var viewModel: BrowserViewModel
 
     func makeNSView(context: Context) -> WKWebView {
-        webView
+        viewModel.makeConfiguredWebView()
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 }
 #else
 struct BrowserWebView: UIViewRepresentable {
-    let webView: WKWebView
+    @ObservedObject var viewModel: BrowserViewModel
 
     func makeUIView(context: Context) -> WKWebView {
-        webView
+        viewModel.makeConfiguredWebView()
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 #endif
+
+extension BrowserViewModel {
+    func makeConfiguredWebView() -> WKWebView {
+        if let webView {
+            return webView
+        }
+
+        let configuration = WKWebViewConfiguration()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        configureWebView(webView)
+        return webView
+    }
+
+    private func configureWebView(_ webView: WKWebView) {
+        self.webView = webView
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
+
+        progressObservation?.invalidate()
+        progressObservation = webView.observe(\.estimatedProgress, options: .new) { [weak self] webView, _ in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.progress = webView.estimatedProgress
+            }
+        }
+
+        attemptToLoadPendingURL()
+    }
+
+    private func attemptToLoadPendingURL() {
+        guard let webView, let url = pendingURLToLoad else { return }
+        pendingURLToLoad = nil
+        webView.load(URLRequest(url: url))
+    }
+}
+
+extension BrowserViewModel: WKUIDelegate {
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard navigationAction.targetFrame == nil, let url = navigationAction.request.url else {
+            return nil
+        }
+
+        load(url: url)
+        return nil
+    }
+}
 
 private extension Color {
     static var browserBackground: Color {
