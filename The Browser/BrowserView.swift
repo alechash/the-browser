@@ -79,7 +79,7 @@ struct BrowserView: View {
 #endif
         .sheet(isPresented: $isShowingSettings) {
             SettingsPanel(settings: settings)
-                .frame(width: 600, height:600)
+                .frame(width: 600, height: 600)
         }
     }
 
@@ -108,6 +108,9 @@ struct BrowserView: View {
                 withAnimation {
                     isWebContentFullscreen.toggle()
                 }
+            },
+            openSettings: {
+                isShowingSettings = true
             },
             canSelectNextTab: viewModel.hasMultipleTabs,
             canSelectPreviousTab: viewModel.hasMultipleTabs,
