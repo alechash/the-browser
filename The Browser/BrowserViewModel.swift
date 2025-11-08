@@ -456,6 +456,19 @@ final class BrowserViewModel: NSObject, ObservableObject {
         load(url: targetURL, in: id)
     }
 
+    func performSearch(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let targetURL = settings.searchURL(for: trimmed)
+
+        if tabs.isEmpty || selectedTabID == nil {
+            openNewTab(with: targetURL)
+        } else {
+            load(url: targetURL)
+        }
+    }
+
     func load(url: URL, in tabID: UUID? = nil) {
         guard let id = tabID ?? selectedTabID,
               let index = tabs.firstIndex(where: { $0.id == id }) else { return }

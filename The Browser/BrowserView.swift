@@ -23,7 +23,12 @@ struct BrowserView: View {
         ZStack(alignment: .leading) {
             Group {
                 if activeWebTabs.isEmpty {
-                    DefaultHomeView()
+                    DefaultHomeView(
+                        settings: settings,
+                        onSubmitSearch: { query in
+                            viewModel.performSearch(query)
+                        }
+                    )
                 } else {
                     splitViewContent(for: activeWebTabs)
                 }
