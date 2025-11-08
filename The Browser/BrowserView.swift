@@ -20,11 +20,17 @@ struct BrowserView: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            BrowserWebView(viewModel: viewModel)
-                .background(Color.browserBackground)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.leading, isWebContentFullscreen ? 0 : sidebarWidth)
-                .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
+            Group {
+                if viewModel.isCurrentTabDisplayingWebContent {
+                    BrowserWebView(viewModel: viewModel)
+                } else {
+                    DefaultHomeView()
+                }
+            }
+            .background(Color.browserBackground)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.leading, isWebContentFullscreen ? 0 : sidebarWidth)
+            .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
 
             if !isWebContentFullscreen {
                 BrowserSidebar(
@@ -73,6 +79,7 @@ struct BrowserView: View {
 #endif
         .sheet(isPresented: $isShowingSettings) {
             SettingsPanel(settings: settings)
+                .frame(width: 600, height:600)
         }
     }
 
@@ -133,26 +140,27 @@ private struct BrowserSidebar: View {
 
             Spacer()
 
-            VStack(alignment: .leading, spacing: 12) {
-                glassButton(
-                    title: "Web Inspector",
+            HStack(spacing: 12) {
+                iconControlButton(
                     systemImage: "ladybug",
-                    action: viewModel.openInspector,
-                    isEnabled: viewModel.currentTabExists
+                    help: "Web Inspector",
+                    isEnabled: viewModel.isCurrentTabDisplayingWebContent,
+                    action: viewModel.openInspector
                 )
 
-                glassButton(
-                    title: "Settings",
+                iconControlButton(
                     systemImage: "gearshape",
-                    action: { isShowingSettings = true },
-                    isEnabled: true
+                    help: "Settings",
+                    isEnabled: true,
+                    action: { isShowingSettings = true }
                 )
             }
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .foregroundStyle(appearance.primary)
-        .liquidGlassBackground(tint: appearance.background, cornerRadius: 0, includeShadow: false)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .padding(20)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .foregroundStyle(appearance.primary)
+    .liquidGlassBackground(tint: appearance.background, cornerRadius: 0, includeShadow: false)
     }
 
     private var header: some View {
@@ -206,7 +214,7 @@ private struct BrowserSidebar: View {
             NavigationControlButton(
                 symbol: viewModel.isLoading ? "xmark" : "arrow.clockwise",
                 help: viewModel.isLoading ? "Stop" : "Reload",
-                isEnabled: viewModel.currentTabExists,
+                isEnabled: viewModel.isCurrentTabDisplayingWebContent,
                 appearance: appearance,
                 action: viewModel.reloadOrStop
             )
@@ -222,7 +230,7 @@ private struct BrowserSidebar: View {
             NavigationControlButton(
                 symbol: "arrow.up.left.and.arrow.down.right",
                 help: "Enter Fullscreen",
-                isEnabled: viewModel.currentTabExists,
+                isEnabled: viewModel.isCurrentTabDisplayingWebContent,
                 appearance: appearance,
                 action: enterFullscreen
             )
@@ -315,19 +323,20 @@ private struct BrowserSidebar: View {
         }
     }
 
-    private func glassButton(title: String, systemImage: String, action: @escaping () -> Void, isEnabled: Bool) -> some View {
+    private func iconControlButton(systemImage: String, help: String, isEnabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .labelStyle(.leadingIcon)
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 42, height: 42)
                 .foregroundStyle(appearance.primary)
-                .padding(.vertical, 12)
-                .padding(.horizontal, 14)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 18, includeShadow: false)
+        .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
         .opacity(isEnabled ? 1 : 0.45)
+#if os(macOS)
+        .help(help)
+#endif
     }
 }
 
@@ -468,15 +477,3 @@ private struct TabRow: View {
     }
 }
 
-private struct LeadingIconLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 12) {
-            configuration.icon
-            configuration.title
-        }
-    }
-}
-
-private extension LabelStyle where Self == LeadingIconLabelStyle {
-    static var leadingIcon: LeadingIconLabelStyle { LeadingIconLabelStyle() }
-}

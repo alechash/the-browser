@@ -8,6 +8,11 @@ import AppKit
 @MainActor
 final class BrowserViewModel: NSObject, ObservableObject {
     struct TabState: Identifiable, Equatable {
+        enum Kind: Equatable {
+            case nativeHome
+            case web
+        }
+
         let id: UUID
         var title: String
         var addressBarText: String
@@ -16,6 +21,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         var isLoading: Bool
         var progress: Double
         var currentURL: URL?
+        var kind: Kind
     }
 
     private struct ClosedTabSnapshot {
@@ -33,7 +39,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published var sidebarAppearance: BrowserSidebarAppearance
 
     var shouldShowProgress: Bool {
-        guard let tab = currentTab else { return false }
+        guard let tab = currentTab, tab.kind == .web else { return false }
         return tab.isLoading || tab.progress < 1
     }
 
@@ -71,6 +77,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     var canReopenLastClosedTab: Bool {
         !closedTabHistory.isEmpty
+    }
+
+    var isCurrentTabDisplayingWebContent: Bool {
+        currentTab?.kind == .web
     }
 
     private let settings: BrowserSettings
@@ -133,24 +143,28 @@ final class BrowserViewModel: NSObject, ObservableObject {
         openNewTab(with: homeURL)
     }
 
-    func openNewTab(with url: URL) {
+    func openNewTab(with url: URL?) {
         let tabID = UUID()
+        let isWebTab = url != nil
         let newTab = TabState(
             id: tabID,
-            title: "New Tab",
-            addressBarText: url.absoluteString,
+            title: defaultTitle(for: isWebTab ? .web : .nativeHome),
+            addressBarText: url?.absoluteString ?? "",
             canGoBack: false,
             canGoForward: false,
             isLoading: false,
             progress: 0,
-            currentURL: nil
+            currentURL: url,
+            kind: isWebTab ? .web : .nativeHome
         )
 
         tabs.append(newTab)
-        pendingURLs[tabID] = url
-        _ = makeConfiguredWebView(for: tabID)
         selectedTabID = tabID
-        attemptToLoadPendingURL(for: tabID)
+        if let url {
+            pendingURLs[tabID] = url
+            _ = makeConfiguredWebView(for: tabID)
+            attemptToLoadPendingURL(for: tabID)
+        }
     }
 
     func selectTab(_ id: UUID) {
@@ -188,8 +202,19 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
         let tabID = UUID()
         let targetURL = snapshot.url ?? homeURL
-        let addressText = snapshot.addressBarText.isEmpty ? targetURL.absoluteString : snapshot.addressBarText
-        let title = snapshot.title.isEmpty ? "New Tab" : snapshot.title
+        let kind: TabState.Kind = targetURL == nil ? .nativeHome : .web
+        let addressText: String
+        if let url = targetURL {
+            addressText = snapshot.addressBarText.isEmpty ? url.absoluteString : snapshot.addressBarText
+        } else {
+            addressText = ""
+        }
+        let title: String
+        if snapshot.title.isEmpty {
+            title = defaultTitle(for: kind)
+        } else {
+            title = snapshot.title
+        }
 
         let restoredTab = TabState(
             id: tabID,
@@ -199,14 +224,17 @@ final class BrowserViewModel: NSObject, ObservableObject {
             canGoForward: false,
             isLoading: false,
             progress: 0,
-            currentURL: snapshot.url
+            currentURL: targetURL,
+            kind: kind
         )
 
         tabs.append(restoredTab)
-        pendingURLs[tabID] = targetURL
-        _ = makeConfiguredWebView(for: tabID)
         selectedTabID = tabID
-        attemptToLoadPendingURL(for: tabID)
+        if let url = targetURL {
+            pendingURLs[tabID] = url
+            _ = makeConfiguredWebView(for: tabID)
+            attemptToLoadPendingURL(for: tabID)
+        }
     }
 
     func selectNextTab() {
@@ -258,10 +286,16 @@ final class BrowserViewModel: NSObject, ObservableObject {
     func load(url: URL, in tabID: UUID? = nil) {
         guard let id = tabID ?? selectedTabID,
               let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[index].kind = .web
         tabs[index].addressBarText = url.absoluteString
         tabs[index].progress = 0
         tabs[index].currentURL = url
+        tabs[index].title = defaultTitle(for: .web)
+        tabs[index].canGoBack = false
+        tabs[index].canGoForward = false
+        tabs[index].isLoading = true
         pendingURLs[id] = url
+        _ = makeConfiguredWebView(for: id)
         attemptToLoadPendingURL(for: id)
     }
 
@@ -292,7 +326,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     func goHome() {
-        load(url: homeURL)
+        guard let id = selectedTabID else { return }
+        if let url = homeURL {
+            load(url: url, in: id)
+        } else {
+            showNativeHome(in: id)
+        }
     }
 
     func openInspector() {
@@ -366,7 +405,34 @@ final class BrowserViewModel: NSObject, ObservableObject {
         return webViews[id]
     }
 
-    private var homeURL: URL { settings.homePageURL }
+    func isWebTab(_ id: UUID) -> Bool {
+        tabs.first(where: { $0.id == id })?.kind == .web
+    }
+
+    private func showNativeHome(in id: UUID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[index].kind = .nativeHome
+        tabs[index].title = defaultTitle(for: .nativeHome)
+        tabs[index].addressBarText = ""
+        tabs[index].canGoBack = false
+        tabs[index].canGoForward = false
+        tabs[index].isLoading = false
+        tabs[index].progress = 0
+        tabs[index].currentURL = nil
+        pendingURLs.removeValue(forKey: id)
+        cleanupWebView(for: id)
+    }
+
+    private func defaultTitle(for kind: TabState.Kind) -> String {
+        switch kind {
+        case .nativeHome:
+            return "Hello"
+        case .web:
+            return "New Tab"
+        }
+    }
+
+    private var homeURL: URL? { settings.homePageURL }
 
     func makeConfiguredWebView(for tabID: UUID) -> WKWebView {
         if let webView = webViews[tabID] {
@@ -561,6 +627,12 @@ extension BrowserViewModel.TabState {
         if !title.trimmingCharacters(in: .whitespaces).isEmpty {
             return title
         }
+        switch kind {
+        case .nativeHome:
+            return "Hello"
+        case .web:
+            break
+        }
         if let host = currentURL?.host, !host.isEmpty {
             return host
         }
@@ -568,6 +640,7 @@ extension BrowserViewModel.TabState {
     }
 
     var displaySubtitle: String? {
+        guard kind == .web else { return nil }
         guard let url = currentURL else { return nil }
         return url.absoluteString
     }

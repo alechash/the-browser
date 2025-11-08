@@ -7,6 +7,9 @@ struct SettingsPanel: View {
 
     @State private var homePageDraft: String
     @State private var validationMessage: String?
+    @State private var customSearchName: String = ""
+    @State private var customSearchTemplate: String = ""
+    @State private var customSearchError: String?
 
     init(settings: BrowserSettings) {
         self.settings = settings
@@ -17,14 +20,51 @@ struct SettingsPanel: View {
         NavigationView {
             Form {
                 Section("Default Search Engine") {
-                    Picker("Search Engine", selection: $settings.defaultSearchEngine) {
-                        ForEach(BrowserSettings.SearchEngine.allCases) { engine in
-                            Text(engine.displayName).tag(engine)
+                    Picker("Search Engine", selection: $settings.defaultSearchEngineID) {
+                        ForEach(settings.availableSearchEngines) { engine in
+                            Text(engine.displayName).tag(engine.id)
                         }
                     }
 #if os(iOS)
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
 #endif
+
+                    if !settings.customSearchEngines.isEmpty {
+                        ForEach(settings.customSearchEngines) { engine in
+                            HStack {
+                                Text(engine.displayName)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button(role: .destructive) {
+                                    settings.removeCustomSearchEngine(id: engine.id)
+                                    customSearchError = nil
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                    }
+                }
+
+                Section("Add Custom Search Engine") {
+                    TextField("Display name", text: $customSearchName)
+                    TextField("Search URL (use {query})", text: $customSearchTemplate)
+#if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .disableAutocorrection(true)
+#endif
+
+                    if let customSearchError {
+                        Text(customSearchError)
+                            .font(.footnote)
+                            .foregroundColor(.red)
+                    }
+
+                    Button("Add Search Engine", action: addCustomSearchEngine)
+                        .buttonStyle(.borderedProminent)
                 }
 
                 Section("Home Page") {
@@ -45,6 +85,13 @@ struct SettingsPanel: View {
                     Button("Save Home Page", action: saveHomePage)
                         .buttonStyle(.borderedProminent)
                         .padding(.top, 4)
+
+                    Button("Use Built-In Home View") {
+                        settings.useDefaultHomeContent()
+                        homePageDraft = ""
+                        validationMessage = nil
+                    }
+                    .padding(.top, 2)
                 }
             }
             .frame(minWidth: 360, minHeight: 260)
@@ -63,6 +110,16 @@ struct SettingsPanel: View {
             homePageDraft = settings.homePage
         } else {
             validationMessage = "Enter a valid URL or host name."
+        }
+    }
+
+    private func addCustomSearchEngine() {
+        if settings.addCustomSearchEngine(name: customSearchName, template: customSearchTemplate) {
+            customSearchError = nil
+            customSearchName = ""
+            customSearchTemplate = ""
+        } else {
+            customSearchError = "Enter a valid name and URL template."
         }
     }
 }

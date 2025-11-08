@@ -20,6 +20,11 @@ struct BrowserWebView: NSViewRepresentable {
             return
         }
 
+        guard viewModel.isWebTab(tabID) else {
+            nsView.subviews.forEach { $0.removeFromSuperview() }
+            return
+        }
+
         let webView = viewModel.makeConfiguredWebView(for: tabID)
 
         if nsView.subviews.first != webView {
@@ -47,6 +52,11 @@ struct BrowserWebView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIView, context: Context) {
         guard let tabID = viewModel.selectedTabID else {
+            uiView.subviews.forEach { $0.removeFromSuperview() }
+            return
+        }
+
+        guard viewModel.isWebTab(tabID) else {
             uiView.subviews.forEach { $0.removeFromSuperview() }
             return
         }
