@@ -7,6 +7,8 @@
 
 import SwiftUI
 import WebKit
+import Combine
+
 #if os(iOS)
 import UIKit
 #else
@@ -55,10 +57,12 @@ struct BrowserView: View {
                         isAddressFocused = false
                     })
                     .focused($isAddressFocused)
-                    .textInputAutocapitalization(.never)
                     .disableAutocorrection(true)
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
                     .submitLabel(.go)
+                    #endif
                 }
                 .padding(.vertical, 8)
                 .padding(.horizontal, 12)
