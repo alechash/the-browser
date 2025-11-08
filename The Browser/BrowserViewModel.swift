@@ -24,6 +24,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
         var kind: Kind
     }
 
+    enum SplitOrientation: Equatable {
+        case horizontal
+        case vertical
+    }
+
     private struct ClosedTabSnapshot {
         let title: String
         let addressBarText: String
@@ -44,9 +49,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
     @Published var sidebarAppearance: BrowserSidebarAppearance
     @Published private(set) var splitViewTabIDs: [UUID]
+    @Published var splitViewOrientation: SplitOrientation
 #if os(macOS)
     @Published private(set) var poppedOutTabIDs: Set<UUID>
 #endif
+    @Published private var splitViewFractions: [UUID: CGFloat]
 
     var shouldShowProgress: Bool {
         guard let tab = currentTab, tab.kind == .web else { return false }
@@ -94,14 +101,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     var activeWebViewTabIDs: [UUID] {
-        var identifiers: [UUID] = []
-        if let selectedTabID, canDisplayTabInPrimaryArea(selectedTabID) {
-            identifiers.append(selectedTabID)
-        }
-        for id in splitViewTabIDs {
-            guard id != selectedTabID, canDisplayTabInPrimaryArea(id) else { continue }
-            identifiers.append(id)
-        }
+        let identifiers = computeActiveWebViewTabIDs()
+        ensureSplitFractions(for: identifiers)
         return identifiers
     }
 
@@ -132,6 +133,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.poppedOutTabIDs = []
         self.popOutControllers = [:]
 #endif
+        self.splitViewOrientation = .horizontal
+        self.splitViewFractions = [:]
         super.init()
     }
 
@@ -195,6 +198,56 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     func isTabInSplitView(_ id: UUID) -> Bool {
         splitViewTabIDs.contains(id)
+    }
+
+    func splitFractions(for tabIDs: [UUID]) -> [UUID: CGFloat] {
+        ensureSplitFractions(for: tabIDs)
+        return tabIDs.reduce(into: [:]) { result, id in
+            result[id] = splitViewFractions[id] ?? 0
+        }
+    }
+
+    func adjustSplit(after index: Int, by delta: CGFloat, tabIDs: [UUID]) {
+        guard tabIDs.count > 1,
+              index >= 0,
+              index < tabIDs.count - 1 else { return }
+
+        ensureSplitFractions(for: tabIDs)
+
+        let leadingID = tabIDs[index]
+        let trailingID = tabIDs[index + 1]
+        guard let leadingValue = splitViewFractions[leadingID],
+              let trailingValue = splitViewFractions[trailingID] else { return }
+
+        let combined = max(0, leadingValue + trailingValue)
+        guard combined > 0 else { return }
+
+        let minFraction = min(max(0.05, 1.0 / CGFloat(tabIDs.count * 5)), combined / 2)
+
+        var newLeading = leadingValue + delta
+        var newTrailing = trailingValue - delta
+
+        if newLeading < minFraction {
+            newLeading = minFraction
+            newTrailing = combined - newLeading
+        }
+
+        if newTrailing < minFraction {
+            newTrailing = minFraction
+            newLeading = combined - newTrailing
+        }
+
+        newLeading = min(max(newLeading, minFraction), combined - minFraction)
+        newTrailing = combined - newLeading
+
+        splitViewFractions[leadingID] = newLeading
+        splitViewFractions[trailingID] = newTrailing
+
+        normalizeSplitFractions(for: tabIDs)
+    }
+
+    func toggleSplitOrientation() {
+        splitViewOrientation = splitViewOrientation == .horizontal ? .vertical : .horizontal
     }
 
     func toggleSplitView(for id: UUID) {
@@ -512,6 +565,74 @@ final class BrowserViewModel: NSObject, ObservableObject {
             }
             seen.insert(id)
             return true
+        }
+        ensureSplitFractions(for: computeActiveWebViewTabIDs())
+    }
+
+    private func computeActiveWebViewTabIDs() -> [UUID] {
+        var identifiers: [UUID] = []
+        if let selectedTabID, canDisplayTabInPrimaryArea(selectedTabID) {
+            identifiers.append(selectedTabID)
+        }
+        for id in splitViewTabIDs {
+            guard id != selectedTabID, canDisplayTabInPrimaryArea(id) else { continue }
+            identifiers.append(id)
+        }
+        return identifiers
+    }
+
+    private func ensureSplitFractions(for tabIDs: [UUID]) {
+        guard !tabIDs.isEmpty else {
+            if !splitViewFractions.isEmpty {
+                splitViewFractions = [:]
+            }
+            return
+        }
+
+        var fractions: [UUID: CGFloat] = [:]
+        for id in tabIDs {
+            let value = max(splitViewFractions[id] ?? 0, 0)
+            fractions[id] = value
+        }
+
+        let total = fractions.values.reduce(0, +)
+        if total <= 0 {
+            let equal = 1.0 / CGFloat(tabIDs.count)
+            for id in tabIDs {
+                fractions[id] = equal
+            }
+        } else {
+            for id in tabIDs {
+                fractions[id] = (fractions[id] ?? 0) / total
+            }
+        }
+
+        var changed = splitViewFractions.count != fractions.count
+        if !changed {
+            for (id, value) in fractions {
+                guard let existing = splitViewFractions[id] else {
+                    changed = true
+                    break
+                }
+                if abs(existing - value) > 0.0001 {
+                    changed = true
+                    break
+                }
+            }
+        }
+
+        if changed {
+            splitViewFractions = fractions
+        }
+    }
+
+    private func normalizeSplitFractions(for tabIDs: [UUID]) {
+        let total = tabIDs.reduce(into: 0 as CGFloat) { result, id in
+            result += splitViewFractions[id] ?? 0
+        }
+        guard total > 0 else { return }
+        for id in tabIDs {
+            splitViewFractions[id] = (splitViewFractions[id] ?? 0) / total
         }
     }
 
