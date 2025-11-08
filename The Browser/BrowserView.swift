@@ -19,12 +19,13 @@ struct BrowserView: View {
     }
 
     var body: some View {
+        let activeWebTabs = viewModel.activeWebViewTabIDs
         ZStack(alignment: .leading) {
             Group {
-                if viewModel.isCurrentTabDisplayingWebContent {
-                    BrowserWebView(viewModel: viewModel)
-                } else {
+                if activeWebTabs.isEmpty {
                     DefaultHomeView()
+                } else {
+                    splitViewContent(for: activeWebTabs)
                 }
             }
             .background(Color.browserBackground)
@@ -124,6 +125,30 @@ struct BrowserView: View {
         )
     }
 #endif
+}
+
+extension BrowserView {
+    @ViewBuilder
+    private func splitViewContent(for tabIDs: [UUID]) -> some View {
+        if tabIDs.count == 1, let id = tabIDs.first {
+            BrowserWebView(viewModel: viewModel, tabID: id)
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Array(tabIDs.enumerated()), id: \.element) { index, tabID in
+                    BrowserWebView(viewModel: viewModel, tabID: tabID)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if index < tabIDs.count - 1 {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.08))
+                            .frame(width: 1)
+                            .frame(maxHeight: .infinity)
+                    }
+                }
+            }
+            .background(Color.browserBackground)
+        }
+    }
 }
 
 private struct BrowserSidebar: View {
@@ -317,13 +342,32 @@ private struct BrowserSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(viewModel.tabs) { tab in
+#if os(macOS)
                         TabRow(
                             tab: tab,
                             isSelected: tab.id == viewModel.selectedTabID,
                             appearance: appearance,
                             selectAction: { viewModel.selectTab(tab.id) },
-                            closeAction: { viewModel.closeTab(tab.id) }
+                            closeAction: { viewModel.closeTab(tab.id) },
+                            isInSplitView: viewModel.isTabInSplitView(tab.id),
+                            canShowInSplitView: viewModel.canShowTabInSplitView(tab.id),
+                            toggleSplitAction: { viewModel.toggleSplitView(for: tab.id) },
+                            isPoppedOut: viewModel.isTabPoppedOut(tab.id),
+                            canPopOut: viewModel.canPopOutTab(tab.id),
+                            togglePopOutAction: { viewModel.togglePopOut(for: tab.id) }
                         )
+#else
+                        TabRow(
+                            tab: tab,
+                            isSelected: tab.id == viewModel.selectedTabID,
+                            appearance: appearance,
+                            selectAction: { viewModel.selectTab(tab.id) },
+                            closeAction: { viewModel.closeTab(tab.id) },
+                            isInSplitView: viewModel.isTabInSplitView(tab.id),
+                            canShowInSplitView: viewModel.canShowTabInSplitView(tab.id),
+                            toggleSplitAction: { viewModel.toggleSplitView(for: tab.id) }
+                        )
+#endif
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -436,6 +480,14 @@ private struct TabRow: View {
     let appearance: BrowserSidebarAppearance
     let selectAction: () -> Void
     let closeAction: () -> Void
+    let isInSplitView: Bool
+    let canShowInSplitView: Bool
+    let toggleSplitAction: () -> Void
+#if os(macOS)
+    let isPoppedOut: Bool
+    let canPopOut: Bool
+    let togglePopOutAction: () -> Void
+#endif
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -461,14 +513,52 @@ private struct TabRow: View {
                     .progressViewStyle(.circular)
                     .tint(appearance.primary)
             } else {
-                Button(action: closeAction) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(appearance.primary)
+                HStack(spacing: 6) {
+                    Button(action: toggleSplitAction) {
+                        Image(systemName: isInSplitView ? "square.split.2x1.fill" : "square.split.2x1")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .foregroundStyle(appearance.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canShowInSplitView)
+                    .liquidGlassBackground(
+                        tint: appearance.controlTint.opacity(isInSplitView ? 1 : 0.65),
+                        cornerRadius: 10,
+                        includeShadow: false
+                    )
+                    .opacity(canShowInSplitView ? 0.9 : 0.35)
+#if os(macOS)
+                    .help(isInSplitView ? "Remove from Split View" : "Add to Split View")
+#endif
+
+#if os(macOS)
+                    Button(action: togglePopOutAction) {
+                        Image(systemName: isPoppedOut ? "arrow.down.left.square" : "arrow.up.right.square")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .foregroundStyle(appearance.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canPopOut)
+                    .liquidGlassBackground(
+                        tint: appearance.controlTint.opacity(isPoppedOut ? 1 : 0.65),
+                        cornerRadius: 10,
+                        includeShadow: false
+                    )
+                    .opacity(canPopOut ? 0.9 : 0.35)
+                    .help(isPoppedOut ? "Return to Main Window" : "Pop Out")
+#endif
+
+                    Button(action: closeAction) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(appearance.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .opacity(0.7)
                 }
-                .buttonStyle(.plain)
-                .opacity(0.7)
             }
         }
         .padding(.vertical, 10)
