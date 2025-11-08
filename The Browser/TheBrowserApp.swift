@@ -55,7 +55,7 @@ struct BrowserView: View {
             if !isWebContentFullscreen {
                 sidebar
                     .frame(width: sidebarWidth)
-                    .background(Color.browserSidebarBackground)
+                    .background(viewModel.sidebarBackgroundColor)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
 
@@ -900,7 +900,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     @Published private(set) var tabs: [TabState]
-    @Published var selectedTabID: UUID?
+    @Published var selectedTabID: UUID? {
+        didSet {
+            updateSidebarBackgroundForSelection()
+        }
+    }
+    @Published var sidebarBackgroundColor: Color
 
     var shouldShowProgress: Bool {
         guard let tab = currentTab else { return false }
@@ -950,20 +955,47 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private var progressObservations: [UUID: NSKeyValueObservation]
     private var pendingURLs: [UUID: URL]
     private var closedTabHistory: [ClosedTabSnapshot]
+#if os(macOS)
+    private var tabSidebarColors: [UUID: Color]
+#endif
 
     init(settings: BrowserSettings) {
         self.settings = settings
         self.tabs = []
+        self.sidebarBackgroundColor = Color.browserSidebarBackground
         self.webViews = [:]
         self.webViewToTabID = [:]
         self.progressObservations = [:]
         self.pendingURLs = [:]
         self.closedTabHistory = []
+#if os(macOS)
+        self.tabSidebarColors = [:]
+#endif
         super.init()
     }
 
     deinit {
         progressObservations.values.forEach { $0.invalidate() }
+    }
+
+    private func updateSidebarBackgroundForSelection() {
+#if os(macOS)
+        guard let tabID = selectedTabID else {
+            sidebarBackgroundColor = Color.browserSidebarBackground
+            return
+        }
+
+        if let cachedColor = tabSidebarColors[tabID] {
+            sidebarBackgroundColor = cachedColor
+        } else {
+            sidebarBackgroundColor = Color.browserSidebarBackground
+            if let webView = webViews[tabID] {
+                captureSidebarBackgroundColor(from: webView, for: tabID)
+            }
+        }
+#else
+        sidebarBackgroundColor = Color.browserSidebarBackground
+#endif
     }
 
     func loadInitialPageIfNeeded() {
@@ -990,9 +1022,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         )
 
         tabs.append(newTab)
-        selectedTabID = tabID
         pendingURLs[tabID] = url
         _ = makeConfiguredWebView(for: tabID)
+        selectedTabID = tabID
         attemptToLoadPendingURL(for: tabID)
     }
 
@@ -1046,9 +1078,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         )
 
         tabs.append(restoredTab)
-        selectedTabID = tabID
         pendingURLs[tabID] = targetURL
         _ = makeConfiguredWebView(for: tabID)
+        selectedTabID = tabID
         attemptToLoadPendingURL(for: tabID)
     }
 
@@ -1171,6 +1203,14 @@ final class BrowserViewModel: NSObject, ObservableObject {
     func findInPage() {
         guard let webView = currentWebView else { return }
 #if os(macOS)
+        if webView.window?.firstResponder !== webView {
+            webView.window?.makeFirstResponder(webView)
+        }
+
+        if webView.window == nil {
+            _ = webView.becomeFirstResponder()
+        }
+
         webView.performTextFinderAction(.showFindInterface)
 #endif
     }
@@ -1283,6 +1323,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
 
         pendingURLs.removeValue(forKey: tabID)
+#if os(macOS)
+        tabSidebarColors.removeValue(forKey: tabID)
+        if selectedTabID == tabID {
+            sidebarBackgroundColor = Color.browserSidebarBackground
+        }
+#endif
     }
 
     private func tabID(for webView: WKWebView) -> UUID? {
@@ -1299,6 +1345,99 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard let webView = currentWebView else { return }
         let newMagnification = max(0.5, min(3.0, webView.magnification + delta))
         webView.setMagnification(newMagnification, centeredAt: CGPoint(x: webView.bounds.midX, y: webView.bounds.midY))
+    }
+
+    private func captureSidebarBackgroundColor(from webView: WKWebView, for tabID: UUID) {
+        let script = """
+        (() => {
+            const transparentValues = new Set(['rgba(0, 0, 0, 0)', 'rgba(0,0,0,0)', 'transparent']);
+            const resolveColor = (element) => {
+                if (!element) { return null; }
+                const color = window.getComputedStyle(element).backgroundColor;
+                if (!color) { return null; }
+                const normalized = color.trim().toLowerCase();
+                if (transparentValues.has(normalized)) { return null; }
+                return color;
+            };
+            return resolveColor(document.body) ?? resolveColor(document.documentElement) ?? null;
+        })();
+        """
+
+        webView.evaluateJavaScript(script) { [weak self] result, error in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                if let colorString = result as? String,
+                   let nsColor = BrowserViewModel.nsColor(fromCSSColorString: colorString) {
+                    let tinted = BrowserViewModel.makeSidebarTint(from: nsColor)
+                    let swiftUIColor = Color(nsColor: tinted)
+                    self.storeSidebarColor(swiftUIColor, for: tabID)
+                } else if error == nil {
+                    self.storeSidebarColor(nil, for: tabID)
+                }
+            }
+        }
+    }
+
+    private func storeSidebarColor(_ color: Color?, for tabID: UUID) {
+        if let color {
+            tabSidebarColors[tabID] = color
+            if selectedTabID == tabID {
+                sidebarBackgroundColor = color
+            }
+        } else {
+            tabSidebarColors.removeValue(forKey: tabID)
+            if selectedTabID == tabID {
+                sidebarBackgroundColor = Color.browserSidebarBackground
+            }
+        }
+    }
+
+    private static func makeSidebarTint(from color: NSColor) -> NSColor {
+        let source = color.usingColorSpace(.deviceRGB) ?? color
+        let windowColor = NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB) ?? NSColor.windowBackgroundColor
+        return source.blended(withFraction: 0.7, of: windowColor) ?? windowColor
+    }
+
+    private static func nsColor(fromCSSColorString css: String) -> NSColor? {
+        let trimmed = css.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("rgb") else { return nil }
+
+        let scanner = Scanner(string: trimmed)
+        _ = scanner.scanUpToString("(")
+        guard scanner.scanString("(") != nil else { return nil }
+
+        var components: [CGFloat] = []
+        let separators = CharacterSet(charactersIn: ",/ ")
+
+        while !scanner.isAtEnd {
+            if let value = scanner.scanDouble() {
+                components.append(CGFloat(value))
+            }
+
+            if scanner.scanString(")") != nil {
+                break
+            }
+
+            _ = scanner.scanCharacters(from: separators)
+        }
+
+        guard components.count >= 3 else { return nil }
+
+        func normalize(_ value: CGFloat) -> CGFloat {
+            if value > 1 {
+                return max(0, min(1, value / 255.0))
+            }
+            return max(0, min(1, value))
+        }
+
+        let red = normalize(components[0])
+        let green = normalize(components[1])
+        let blue = normalize(components[2])
+        let alpha = components.count >= 4 ? normalize(components[3]) : 1.0
+
+        guard alpha > 0.05 else { return nil }
+
+        return NSColor(calibratedRed: red, green: green, blue: blue, alpha: alpha)
     }
 #endif
 }
@@ -1355,6 +1494,9 @@ extension BrowserViewModel: WKNavigationDelegate {
         tabs[index].addressBarText = webView.url?.absoluteString ?? tabs[index].addressBarText
         tabs[index].currentURL = webView.url
         tabs[index].title = webView.title ?? tabs[index].title
+#if os(macOS)
+        captureSidebarBackgroundColor(from: webView, for: tabID)
+#endif
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -1479,9 +1621,7 @@ private extension Color {
 
     static var browserSidebarBackground: Color {
 #if os(macOS)
-        let windowColor = NSColor.windowBackgroundColor
-        let accentBlended = windowColor.blended(withFraction: 0.08, of: NSColor.controlAccentColor) ?? windowColor
-        return Color(nsColor: accentBlended)
+        Color(nsColor: NSColor.windowBackgroundColor)
 #else
         Color(.systemGroupedBackground)
 #endif
