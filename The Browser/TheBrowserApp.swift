@@ -29,11 +29,13 @@ struct BrowserView: View {
     @FocusState private var isAddressFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            addressBar
+        HStack(spacing: 0) {
+            sidebar
+                .frame(width: 280)
+                .background(Color.browserSidebarBackground)
+
             BrowserWebView(viewModel: viewModel)
                 .background(Color.browserBackground)
-            toolbar
         }
         .background(Color.browserBackground)
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -42,150 +44,394 @@ struct BrowserView: View {
         }
     }
 
-    private var addressBar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "safari")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.blue)
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            header
 
-                    TextField("Search or enter website name",
-                              text: $viewModel.addressBarText,
-                              onCommit: {
-                        viewModel.submitAddress()
-                        isAddressFocused = false
-                    })
-                    .focused($isAddressFocused)
-                    .disableAutocorrection(true)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                    .submitLabel(.go)
-                    #endif
+            VStack(alignment: .leading, spacing: 12) {
+                navigationButtons
+                addressField
+
+                if viewModel.shouldShowProgress {
+                    ProgressView(value: viewModel.progress)
+                        .progressViewStyle(.linear)
+                        .tint(.blue)
                 }
-                .padding(.vertical, 8)
-                .padding(.horizontal, 12)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.browserControlBackground)
-                )
+            }
 
-                Button(action: viewModel.reloadOrStop) {
-                    Image(systemName: viewModel.isLoading ? "xmark" : "arrow.clockwise")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            Circle()
-                                .fill(Color.browserControlBackground)
-                        )
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Tabs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(action: viewModel.openNewTab) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .bold))
+                            .padding(6)
+                            .background(Color.browserControlBackground)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(viewModel.tabs) { tab in
+                            TabRow(
+                                tab: tab,
+                                isSelected: tab.id == viewModel.selectedTabID,
+                                selectAction: { viewModel.selectTab(tab.id) },
+                                closeAction: { viewModel.closeTab(tab.id) }
+                            )
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+            Spacer()
+
+            VStack(alignment: .leading, spacing: 12) {
+                Button(action: viewModel.openInspector) {
+                    Label("Web Inspector", systemImage: "ladybug")
+                        .labelStyle(.leadingIcon)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.browserSidebarButtonBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-
-            if viewModel.shouldShowProgress {
-                ProgressView(value: viewModel.progress)
-                    .progressViewStyle(.linear)
-                    .tint(.blue)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+                .disabled(!viewModel.currentTabExists)
+                .opacity(viewModel.currentTabExists ? 1 : 0.4)
             }
         }
-        .background(.regularMaterial)
+        .padding(16)
     }
 
-    private var toolbar: some View {
-        HStack(spacing: 32) {
-            ToolbarButton(symbol: "chevron.left", title: "Back") {
-                viewModel.goBack()
-            }
-            .disabled(!viewModel.canGoBack)
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 18, weight: .heavy))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(
+                    Circle()
+                        .fill(Color.browserAccent)
+                )
 
-            ToolbarButton(symbol: "chevron.right", title: "Forward") {
-                viewModel.goForward()
-            }
-            .disabled(!viewModel.canGoForward)
-
-#if os(iOS)
-            ToolbarButton(symbol: "square.and.arrow.up", title: "Share") {
-                viewModel.presentShareSheet()
-            }
-            .disabled(viewModel.currentURL == nil)
-#endif
-            ToolbarButton(symbol: "bookmark", title: "Home") {
-                viewModel.goHome()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("The Browser")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                Text("Workspace")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-        .background(.regularMaterial)
+    }
+
+    private var navigationButtons: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SidebarButton(
+                symbol: "chevron.left",
+                title: "Back",
+                isEnabled: viewModel.canGoBack,
+                action: viewModel.goBack
+            )
+
+            SidebarButton(
+                symbol: "chevron.right",
+                title: "Forward",
+                isEnabled: viewModel.canGoForward,
+                action: viewModel.goForward
+            )
+
+            SidebarButton(
+                symbol: viewModel.isLoading ? "xmark" : "arrow.clockwise",
+                title: viewModel.isLoading ? "Stop" : "Reload",
+                isEnabled: viewModel.currentTabExists,
+                action: viewModel.reloadOrStop
+            )
+
+            SidebarButton(
+                symbol: "bookmark",
+                title: "Home",
+                isEnabled: viewModel.currentTabExists,
+                action: viewModel.goHome
+            )
+        }
+    }
+
+    private var addressField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Address")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField(
+                "Search or enter website name",
+                text: Binding(
+                    get: { viewModel.currentAddressText },
+                    set: { viewModel.updateAddressText($0) }
+                )
+            )
+            .focused($isAddressFocused)
+            .textFieldStyle(.plain)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.browserControlBackground)
+            )
+            .onSubmit {
+                viewModel.submitAddress()
+                isAddressFocused = false
+            }
+#if os(iOS)
+            .textInputAutocapitalization(.never)
+            .keyboardType(.URL)
+            .disableAutocorrection(true)
+            .submitLabel(.go)
+#endif
+        }
     }
 }
 
-private struct ToolbarButton: View {
+private struct SidebarButton: View {
     let symbol: String
     let title: String
+    let isEnabled: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            HStack(spacing: 12) {
                 Image(systemName: symbol)
-                    .font(.system(size: 18, weight: .medium))
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle()
+                            .fill(Color.browserControlBackground)
+                    )
+
                 Text(title)
-                    .font(.caption2)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
             }
-            .frame(minWidth: 44)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.browserSidebarButtonBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.primary)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
     }
+}
+
+private struct TabRow: View {
+    let tab: BrowserViewModel.TabState
+    let isSelected: Bool
+    let selectAction: () -> Void
+    let closeAction: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tab.displayTitle)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+
+                if let subtitle = tab.displaySubtitle {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            if tab.isLoading {
+                ProgressView()
+                    .progressViewStyle(.circular)
+            } else {
+                Button(action: closeAction) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.primary)
+                        .padding(6)
+                        .background(Color.browserControlBackground)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .opacity(0.7)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isSelected ? Color.browserSidebarSelection : Color.clear)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onTapGesture(perform: selectAction)
+    }
+}
+
+private struct LeadingIconLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 12) {
+            configuration.icon
+            configuration.title
+        }
+    }
+}
+
+private extension LabelStyle where Self == LeadingIconLabelStyle {
+    static var leadingIcon: LeadingIconLabelStyle { LeadingIconLabelStyle() }
 }
 
 @MainActor
 final class BrowserViewModel: NSObject, ObservableObject {
-    @Published var addressBarText: String
-    @Published var canGoBack = false
-    @Published var canGoForward = false
-    @Published var isLoading = false
-    @Published var progress: Double = 0
-    @Published var currentURL: URL?
+    struct TabState: Identifiable, Equatable {
+        let id: UUID
+        var title: String
+        var addressBarText: String
+        var canGoBack: Bool
+        var canGoForward: Bool
+        var isLoading: Bool
+        var progress: Double
+        var currentURL: URL?
+    }
+
+    @Published private(set) var tabs: [TabState]
+    @Published var selectedTabID: UUID?
+
+    var shouldShowProgress: Bool {
+        guard let tab = currentTab else { return false }
+        return tab.isLoading || tab.progress < 1
+    }
+
+    var progress: Double {
+        currentTab?.progress ?? 0
+    }
+
+    var isLoading: Bool {
+        currentTab?.isLoading ?? false
+    }
+
+    var canGoBack: Bool {
+        currentTab?.canGoBack ?? false
+    }
+
+    var canGoForward: Bool {
+        currentTab?.canGoForward ?? false
+    }
+
+    var currentURL: URL? {
+        currentTab?.currentURL
+    }
+
+    var currentAddressText: String {
+        currentTab?.addressBarText ?? ""
+    }
+
+    var currentTabExists: Bool {
+        currentTab != nil
+    }
 
     private let homeURL: URL
     private var hasLoadedInitialPage = false
-    private var pendingURLToLoad: URL?
-    private var progressObservation: NSKeyValueObservation?
-    private weak var webView: WKWebView?
+    private var webViews: [UUID: WKWebView]
+    private var webViewToTabID: [ObjectIdentifier: UUID]
+    private var progressObservations: [UUID: NSKeyValueObservation]
+    private var pendingURLs: [UUID: URL]
 
     override init() {
         self.homeURL = URL(string: "https://www.apple.com")!
-        self.addressBarText = homeURL.absoluteString
-        self.currentURL = homeURL
-
+        self.tabs = []
+        self.webViews = [:]
+        self.webViewToTabID = [:]
+        self.progressObservations = [:]
+        self.pendingURLs = [:]
         super.init()
     }
 
     deinit {
-        progressObservation?.invalidate()
-    }
-
-    var shouldShowProgress: Bool {
-        isLoading || progress < 1
+        progressObservations.values.forEach { $0.invalidate() }
     }
 
     func loadInitialPageIfNeeded() {
         guard !hasLoadedInitialPage else { return }
         hasLoadedInitialPage = true
-        load(url: homeURL)
+        openNewTab(with: homeURL)
+    }
+
+    func openNewTab() {
+        openNewTab(with: homeURL)
+    }
+
+    func openNewTab(with url: URL) {
+        let tabID = UUID()
+        let newTab = TabState(
+            id: tabID,
+            title: "New Tab",
+            addressBarText: url.absoluteString,
+            canGoBack: false,
+            canGoForward: false,
+            isLoading: false,
+            progress: 0,
+            currentURL: nil
+        )
+
+        tabs.append(newTab)
+        selectedTabID = tabID
+        pendingURLs[tabID] = url
+        _ = makeConfiguredWebView(for: tabID)
+        attemptToLoadPendingURL(for: tabID)
+    }
+
+    func selectTab(_ id: UUID) {
+        guard tabs.contains(where: { $0.id == id }) else { return }
+        selectedTabID = id
+    }
+
+    func closeTab(_ id: UUID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs.remove(at: index)
+        cleanupWebView(for: id)
+
+        if selectedTabID == id {
+            if index < tabs.endIndex {
+                selectedTabID = tabs[index].id
+            } else {
+                selectedTabID = tabs.last?.id
+            }
+        }
+
+        if tabs.isEmpty {
+            openNewTab()
+        }
+    }
+
+    func updateAddressText(_ text: String) {
+        guard let id = selectedTabID, let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[index].addressBarText = text
     }
 
     func submitAddress() {
-        let input = addressBarText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let id = selectedTabID, let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let input = tabs[index].addressBarText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
 
         let targetURL: URL
@@ -195,20 +441,21 @@ final class BrowserViewModel: NSObject, ObservableObject {
             targetURL = BrowserViewModel.searchURL(for: input)
         }
 
-        load(url: targetURL)
+        load(url: targetURL, in: id)
     }
 
-    func load(url: URL) {
-        addressBarText = url.absoluteString
-        progress = 0
-        currentURL = url
-        pendingURLToLoad = url
-        attemptToLoadPendingURL()
+    func load(url: URL, in tabID: UUID? = nil) {
+        guard let id = tabID ?? selectedTabID, let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[index].addressBarText = url.absoluteString
+        tabs[index].progress = 0
+        tabs[index].currentURL = url
+        pendingURLs[id] = url
+        attemptToLoadPendingURL(for: id)
     }
 
     func reloadOrStop() {
-        guard let webView else { return }
-        if isLoading {
+        guard let id = selectedTabID, let index = tabs.firstIndex(where: { $0.id == id }), let webView = webViews[id] else { return }
+        if tabs[index].isLoading {
             webView.stopLoading()
         } else {
             webView.reload()
@@ -216,11 +463,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     func goBack() {
-        webView?.goBack()
+        guard let id = selectedTabID, let webView = webViews[id] else { return }
+        webView.goBack()
     }
 
     func goForward() {
-        webView?.goForward()
+        guard let id = selectedTabID, let webView = webViews[id] else { return }
+        webView.goForward()
     }
 
     func goHome() {
@@ -230,7 +479,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     func presentShareSheet() {
         guard let url = currentURL else { return }
 
-        #if os(iOS)
+#if os(iOS)
         let activityController = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -238,7 +487,107 @@ final class BrowserViewModel: NSObject, ObservableObject {
             .first { $0.isKeyWindow }?
             .rootViewController?
             .present(activityController, animated: true)
-        #endif
+#endif
+    }
+
+    func openInspector() {
+        guard let id = selectedTabID, let webView = webViews[id] else { return }
+#if os(macOS)
+        webView.configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        if webView.responds(to: Selector(("_toggleInspector:"))) {
+            webView.perform(Selector(("_toggleInspector:")))
+        } else {
+            webView.evaluateJavaScript("debugger;")
+        }
+#else
+        webView.evaluateJavaScript("debugger;")
+#endif
+    }
+
+    private var currentTab: TabState? {
+        guard let id = selectedTabID else { return nil }
+        return tabs.first(where: { $0.id == id })
+    }
+
+    func makeConfiguredWebView(for tabID: UUID) -> WKWebView {
+        if let webView = webViews[tabID] {
+            return webView
+        }
+
+        let configuration = WKWebViewConfiguration()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+#if os(macOS)
+        configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+#endif
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webViews[tabID] = webView
+        configureWebView(webView, for: tabID)
+        return webView
+    }
+
+    private func configureWebView(_ webView: WKWebView, for tabID: UUID) {
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
+        webViewToTabID[ObjectIdentifier(webView)] = tabID
+
+        progressObservations[tabID]?.invalidate()
+        progressObservations[tabID] = webView.observe(\.estimatedProgress, options: .new) { [weak self] webView, _ in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.updateProgress(for: webView, value: webView.estimatedProgress)
+            }
+        }
+
+        attemptToLoadPendingURL(for: tabID)
+    }
+
+    private func attemptToLoadPendingURL(for tabID: UUID) {
+        guard let url = pendingURLs.removeValue(forKey: tabID) else { return }
+        let webView = makeConfiguredWebView(for: tabID)
+        webView.load(URLRequest(url: url))
+    }
+
+    private func cleanupWebView(for tabID: UUID) {
+        if let observation = progressObservations.removeValue(forKey: tabID) {
+            observation.invalidate()
+        }
+
+        if let webView = webViews.removeValue(forKey: tabID) {
+            webView.navigationDelegate = nil
+            webView.uiDelegate = nil
+            webViewToTabID.removeValue(forKey: ObjectIdentifier(webView))
+        }
+
+        pendingURLs.removeValue(forKey: tabID)
+    }
+
+    private func tabID(for webView: WKWebView) -> UUID? {
+        webViewToTabID[ObjectIdentifier(webView)]
+    }
+
+    private func updateProgress(for webView: WKWebView, value: Double) {
+        guard let tabID = tabID(for: webView), let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        tabs[index].progress = value
+    }
+}
+
+private extension BrowserViewModel.TabState {
+    var displayTitle: String {
+        if !title.trimmingCharacters(in: .whitespaces).isEmpty {
+            return title
+        }
+        if let host = currentURL?.host, !host.isEmpty {
+            return host
+        }
+        return "New Tab"
+    }
+
+    var displaySubtitle: String? {
+        guard let url = currentURL else { return nil }
+        return url.absoluteString
     }
 }
 
@@ -269,35 +618,37 @@ private extension BrowserViewModel {
 
 extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        updateNavigationState(isLoading: true)
+        updateNavigationState(for: webView, isLoading: true)
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        updateNavigationState(isLoading: true)
+        updateNavigationState(for: webView, isLoading: true)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        updateNavigationState(isLoading: false)
-        addressBarText = webView.url?.absoluteString ?? addressBarText
+        updateNavigationState(for: webView, isLoading: false)
+        guard let tabID = tabID(for: webView), let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        tabs[index].addressBarText = webView.url?.absoluteString ?? tabs[index].addressBarText
+        tabs[index].currentURL = webView.url
+        tabs[index].title = webView.title ?? tabs[index].title
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        updateNavigationState(isLoading: false)
+        updateNavigationState(for: webView, isLoading: false)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        updateNavigationState(isLoading: false)
+        updateNavigationState(for: webView, isLoading: false)
     }
 
-    private func updateNavigationState(isLoading: Bool) {
-        self.isLoading = isLoading
-        if let webView {
-            canGoBack = webView.canGoBack
-            canGoForward = webView.canGoForward
-            currentURL = webView.url ?? currentURL
-        }
+    private func updateNavigationState(for webView: WKWebView, isLoading: Bool) {
+        guard let tabID = tabID(for: webView), let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        tabs[index].isLoading = isLoading
+        tabs[index].canGoBack = webView.canGoBack
+        tabs[index].canGoForward = webView.canGoForward
+        tabs[index].currentURL = webView.url ?? tabs[index].currentURL
         if !isLoading {
-            progress = 1
+            tabs[index].progress = 1
         }
     }
 }
@@ -306,62 +657,65 @@ extension BrowserViewModel: WKNavigationDelegate {
 struct BrowserWebView: NSViewRepresentable {
     @ObservedObject var viewModel: BrowserViewModel
 
-    func makeNSView(context: Context) -> WKWebView {
-        viewModel.makeConfiguredWebView()
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView()
+        container.wantsLayer = true
+        return container
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let tabID = viewModel.selectedTabID else {
+            nsView.subviews.forEach { $0.removeFromSuperview() }
+            return
+        }
+
+        let webView = viewModel.makeConfiguredWebView(for: tabID)
+
+        if nsView.subviews.first != webView {
+            nsView.subviews.forEach { $0.removeFromSuperview() }
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            nsView.addSubview(webView)
+            NSLayoutConstraint.activate([
+                webView.leadingAnchor.constraint(equalTo: nsView.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: nsView.trailingAnchor),
+                webView.topAnchor.constraint(equalTo: nsView.topAnchor),
+                webView.bottomAnchor.constraint(equalTo: nsView.bottomAnchor)
+            ])
+        }
+    }
 }
 #else
 struct BrowserWebView: UIViewRepresentable {
     @ObservedObject var viewModel: BrowserViewModel
 
-    func makeUIView(context: Context) -> WKWebView {
-        viewModel.makeConfiguredWebView()
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .clear
+        return container
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {
+        guard let tabID = viewModel.selectedTabID else {
+            uiView.subviews.forEach { $0.removeFromSuperview() }
+            return
+        }
+
+        let webView = viewModel.makeConfiguredWebView(for: tabID)
+
+        if uiView.subviews.first != webView {
+            uiView.subviews.forEach { $0.removeFromSuperview() }
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            uiView.addSubview(webView)
+            NSLayoutConstraint.activate([
+                webView.leadingAnchor.constraint(equalTo: uiView.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: uiView.trailingAnchor),
+                webView.topAnchor.constraint(equalTo: uiView.topAnchor),
+                webView.bottomAnchor.constraint(equalTo: uiView.bottomAnchor)
+            ])
+        }
+    }
 }
 #endif
-
-extension BrowserViewModel {
-    func makeConfiguredWebView() -> WKWebView {
-        if let webView {
-            return webView
-        }
-
-        let configuration = WKWebViewConfiguration()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        configureWebView(webView)
-        return webView
-    }
-
-    private func configureWebView(_ webView: WKWebView) {
-        self.webView = webView
-        webView.navigationDelegate = self
-        webView.uiDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
-
-        progressObservation?.invalidate()
-        progressObservation = webView.observe(\.estimatedProgress, options: .new) { [weak self] webView, _ in
-            guard let self else { return }
-            DispatchQueue.main.async {
-                self.progress = webView.estimatedProgress
-            }
-        }
-
-        attemptToLoadPendingURL()
-    }
-
-    private func attemptToLoadPendingURL() {
-        guard let webView, let url = pendingURLToLoad else { return }
-        pendingURLToLoad = nil
-        webView.load(URLRequest(url: url))
-    }
-}
 
 extension BrowserViewModel: WKUIDelegate {
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
@@ -369,7 +723,7 @@ extension BrowserViewModel: WKUIDelegate {
             return nil
         }
 
-        load(url: url)
+        openNewTab(with: url)
         return nil
     }
 }
@@ -389,5 +743,29 @@ private extension Color {
 #else
         Color(.secondarySystemBackground)
 #endif
+    }
+
+    static var browserSidebarBackground: Color {
+#if os(macOS)
+        Color(nsColor: .controlBackgroundColor)
+#else
+        Color(.systemGroupedBackground)
+#endif
+    }
+
+    static var browserSidebarButtonBackground: Color {
+#if os(macOS)
+        Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
+#else
+        Color(.tertiarySystemGroupedBackground)
+#endif
+    }
+
+    static var browserSidebarSelection: Color {
+        Color.blue.opacity(0.18)
+    }
+
+    static var browserAccent: Color {
+        Color.blue
     }
 }
