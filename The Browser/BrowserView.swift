@@ -19,12 +19,13 @@ struct BrowserView: View {
     }
 
     var body: some View {
+        let activeWebTabs = viewModel.activeWebViewTabIDs
         ZStack(alignment: .leading) {
             Group {
-                if viewModel.isCurrentTabDisplayingWebContent {
-                    BrowserWebView(viewModel: viewModel)
-                } else {
+                if activeWebTabs.isEmpty {
                     DefaultHomeView()
+                } else {
+                    splitViewContent(for: activeWebTabs)
                 }
             }
             .background(Color.browserBackground)
@@ -125,6 +126,130 @@ struct BrowserView: View {
     }
 #endif
 }
+
+extension BrowserView {
+    @ViewBuilder
+    private func splitViewContent(for tabIDs: [UUID]) -> some View {
+        if tabIDs.count <= 1, let id = tabIDs.first {
+            BrowserWebView(viewModel: viewModel, tabID: id)
+        } else {
+            GeometryReader { geometry in
+                let orientation = viewModel.splitViewOrientation
+                let totalLength = max(orientation == .horizontal ? geometry.size.width : geometry.size.height, 1)
+                let fractions = viewModel.splitFractions(for: tabIDs)
+
+                Group {
+                    if orientation == .horizontal {
+                        HStack(spacing: 0) {
+                            splitViewContentRows(for: tabIDs, orientation: orientation, totalLength: totalLength, fractions: fractions)
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            splitViewContentRows(for: tabIDs, orientation: orientation, totalLength: totalLength, fractions: fractions)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.browserBackground)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func splitViewContentRows(
+        for tabIDs: [UUID],
+        orientation: BrowserViewModel.SplitOrientation,
+        totalLength: CGFloat,
+        fractions: [UUID: CGFloat]
+    ) -> some View {
+        ForEach(Array(tabIDs.enumerated()), id: \.element) { index, tabID in
+            BrowserWebView(viewModel: viewModel, tabID: tabID)
+                .frame(
+                    width: orientation == .horizontal ? max(0, totalLength * (fractions[tabID] ?? 0)) : nil,
+                    height: orientation == .vertical ? max(0, totalLength * (fractions[tabID] ?? 0)) : nil
+                )
+                .frame(
+                    maxWidth: orientation == .horizontal ? nil : .infinity,
+                    maxHeight: orientation == .vertical ? nil : .infinity
+                )
+
+            if index < tabIDs.count - 1 {
+                SplitDivider(orientation: orientation, totalLength: totalLength) { delta in
+                    viewModel.adjustSplit(after: index, by: delta, tabIDs: tabIDs)
+                }
+            }
+        }
+    }
+}
+
+private struct SplitDivider: View {
+    let orientation: BrowserViewModel.SplitOrientation
+    let totalLength: CGFloat
+    let dragChanged: (CGFloat) -> Void
+
+    @State private var isDragging = false
+    @State private var previousTranslation: CGFloat = 0
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.white.opacity(isDragging ? 0.2 : 0.1))
+                .frame(
+                    width: orientation == .horizontal ? 10 : nil,
+                    height: orientation == .vertical ? 10 : nil
+                )
+                .frame(
+                    maxWidth: orientation == .vertical ? .infinity : 10,
+                    maxHeight: orientation == .horizontal ? .infinity : 10
+                )
+
+            if orientation == .horizontal {
+                Rectangle()
+                    .fill(Color.white.opacity(isDragging ? 0.45 : 0.28))
+                    .frame(width: 2)
+                    .frame(maxHeight: .infinity)
+            } else {
+                Rectangle()
+                    .fill(Color.white.opacity(isDragging ? 0.45 : 0.28))
+                    .frame(height: 2)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .contentShape(Rectangle())
+#if os(macOS)
+        .background(NonDraggableView())
+#endif
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    guard totalLength > 0 else { return }
+                    isDragging = true
+                    let translation = orientation == .horizontal ? value.translation.width : value.translation.height
+                    let delta = translation - previousTranslation
+                    previousTranslation = translation
+                    dragChanged(delta / totalLength)
+                }
+                .onEnded { _ in
+                    isDragging = false
+                    previousTranslation = 0
+                }
+        )
+    }
+}
+
+#if os(macOS)
+private struct NonDraggableView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        NonDraggableNSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class NonDraggableNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+}
+#endif
 
 private struct BrowserSidebar: View {
     @ObservedObject var viewModel: BrowserViewModel
@@ -299,11 +424,24 @@ private struct BrowserSidebar: View {
 
     private var tabList: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            HStack(spacing: 10) {
                 Text("Tabs")
                     .font(.caption)
                     .foregroundStyle(appearance.secondary)
                 Spacer()
+                if viewModel.activeWebViewTabIDs.count > 1 {
+                    Button(action: viewModel.toggleSplitOrientation) {
+                        Image(systemName: viewModel.splitViewOrientation == .horizontal ? "square.split.2x1" : "square.split.1x2")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                            .foregroundStyle(appearance.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 14, includeShadow: false)
+#if os(macOS)
+                    .help("Toggle Split Orientation")
+#endif
+                }
                 Button(action: viewModel.openNewTab) {
                     Image(systemName: "plus")
                         .font(.system(size: 14, weight: .bold))
@@ -317,13 +455,34 @@ private struct BrowserSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(viewModel.tabs) { tab in
+#if os(macOS)
                         TabRow(
                             tab: tab,
                             isSelected: tab.id == viewModel.selectedTabID,
                             appearance: appearance,
                             selectAction: { viewModel.selectTab(tab.id) },
-                            closeAction: { viewModel.closeTab(tab.id) }
+                            closeAction: { viewModel.closeTab(tab.id) },
+                            isInSplitView: viewModel.isTabInSplitView(tab.id),
+                            canShowInSplitView: viewModel.canShowTabInSplitView(tab.id),
+                            toggleSplitAction: { viewModel.toggleSplitView(for: tab.id) },
+                            splitOrientation: viewModel.splitViewOrientation,
+                            isPoppedOut: viewModel.isTabPoppedOut(tab.id),
+                            canPopOut: viewModel.canPopOutTab(tab.id),
+                            togglePopOutAction: { viewModel.togglePopOut(for: tab.id) }
                         )
+#else
+                        TabRow(
+                            tab: tab,
+                            isSelected: tab.id == viewModel.selectedTabID,
+                            appearance: appearance,
+                            selectAction: { viewModel.selectTab(tab.id) },
+                            closeAction: { viewModel.closeTab(tab.id) },
+                            isInSplitView: viewModel.isTabInSplitView(tab.id),
+                            canShowInSplitView: viewModel.canShowTabInSplitView(tab.id),
+                            toggleSplitAction: { viewModel.toggleSplitView(for: tab.id) },
+                            splitOrientation: viewModel.splitViewOrientation
+                        )
+#endif
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -436,6 +595,15 @@ private struct TabRow: View {
     let appearance: BrowserSidebarAppearance
     let selectAction: () -> Void
     let closeAction: () -> Void
+    let isInSplitView: Bool
+    let canShowInSplitView: Bool
+    let toggleSplitAction: () -> Void
+    let splitOrientation: BrowserViewModel.SplitOrientation
+#if os(macOS)
+    let isPoppedOut: Bool
+    let canPopOut: Bool
+    let togglePopOutAction: () -> Void
+#endif
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -461,14 +629,52 @@ private struct TabRow: View {
                     .progressViewStyle(.circular)
                     .tint(appearance.primary)
             } else {
-                Button(action: closeAction) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(appearance.primary)
+                HStack(spacing: 6) {
+                    Button(action: toggleSplitAction) {
+                        Image(systemName: splitToggleIcon)
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .foregroundStyle(appearance.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canShowInSplitView)
+                    .liquidGlassBackground(
+                        tint: appearance.controlTint.opacity(isInSplitView ? 1 : 0.65),
+                        cornerRadius: 10,
+                        includeShadow: false
+                    )
+                    .opacity(canShowInSplitView ? 0.9 : 0.35)
+#if os(macOS)
+                    .help(isInSplitView ? "Remove from Split View" : "Add to Split View")
+#endif
+
+#if os(macOS)
+                    Button(action: togglePopOutAction) {
+                        Image(systemName: isPoppedOut ? "arrow.down.left.square" : "arrow.up.right.square")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .foregroundStyle(appearance.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canPopOut)
+                    .liquidGlassBackground(
+                        tint: appearance.controlTint.opacity(isPoppedOut ? 1 : 0.65),
+                        cornerRadius: 10,
+                        includeShadow: false
+                    )
+                    .opacity(canPopOut ? 0.9 : 0.35)
+                    .help(isPoppedOut ? "Return to Main Window" : "Pop Out")
+#endif
+
+                    Button(action: closeAction) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(appearance.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .opacity(0.7)
                 }
-                .buttonStyle(.plain)
-                .opacity(0.7)
             }
         }
         .padding(.vertical, 10)
@@ -482,6 +688,15 @@ private struct TabRow: View {
         .opacity(isSelected ? 1 : 0.9)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture(perform: selectAction)
+    }
+
+    private var splitToggleIcon: String {
+        switch splitOrientation {
+        case .horizontal:
+            return isInSplitView ? "square.split.2x1.fill" : "square.split.2x1"
+        case .vertical:
+            return isInSplitView ? "square.split.1x2.fill" : "square.split.1x2"
+        }
     }
 }
 

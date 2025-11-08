@@ -7,6 +7,7 @@ import AppKit
 #if os(macOS)
 struct BrowserWebView: NSViewRepresentable {
     @ObservedObject var viewModel: BrowserViewModel
+    let tabID: UUID
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
@@ -15,12 +16,7 @@ struct BrowserWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        guard let tabID = viewModel.selectedTabID else {
-            nsView.subviews.forEach { $0.removeFromSuperview() }
-            return
-        }
-
-        guard viewModel.isWebTab(tabID) else {
+        guard viewModel.isWebTab(tabID), !viewModel.isTabPoppedOut(tabID) else {
             nsView.subviews.forEach { $0.removeFromSuperview() }
             return
         }
@@ -28,6 +24,7 @@ struct BrowserWebView: NSViewRepresentable {
         let webView = viewModel.makeConfiguredWebView(for: tabID)
 
         if nsView.subviews.first != webView {
+            webView.removeFromSuperview()
             nsView.subviews.forEach { $0.removeFromSuperview() }
             webView.translatesAutoresizingMaskIntoConstraints = false
             nsView.addSubview(webView)
@@ -43,6 +40,7 @@ struct BrowserWebView: NSViewRepresentable {
 #else
 struct BrowserWebView: UIViewRepresentable {
     @ObservedObject var viewModel: BrowserViewModel
+    let tabID: UUID
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
@@ -51,12 +49,7 @@ struct BrowserWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
-        guard let tabID = viewModel.selectedTabID else {
-            uiView.subviews.forEach { $0.removeFromSuperview() }
-            return
-        }
-
-        guard viewModel.isWebTab(tabID) else {
+        guard viewModel.isWebTab(tabID), !viewModel.isTabPoppedOut(tabID) else {
             uiView.subviews.forEach { $0.removeFromSuperview() }
             return
         }
@@ -64,6 +57,7 @@ struct BrowserWebView: UIViewRepresentable {
         let webView = viewModel.makeConfiguredWebView(for: tabID)
 
         if uiView.subviews.first != webView {
+            webView.removeFromSuperview()
             uiView.subviews.forEach { $0.removeFromSuperview() }
             webView.translatesAutoresizingMaskIntoConstraints = false
             uiView.addSubview(webView)

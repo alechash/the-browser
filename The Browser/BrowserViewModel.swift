@@ -24,6 +24,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
         var kind: Kind
     }
 
+    enum SplitOrientation: Equatable {
+        case horizontal
+        case vertical
+    }
+
     private struct ClosedTabSnapshot {
         let title: String
         let addressBarText: String
@@ -33,10 +38,22 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published private(set) var tabs: [TabState]
     @Published var selectedTabID: UUID? {
         didSet {
+            sanitizeSplitViewTabs()
+#if os(macOS)
+            if let selectedTabID, isTabPoppedOut(selectedTabID) {
+                restoreTabFromPopOut(selectedTabID)
+            }
+#endif
             updateSidebarAppearanceForSelection()
         }
     }
     @Published var sidebarAppearance: BrowserSidebarAppearance
+    @Published private(set) var splitViewTabIDs: [UUID]
+    @Published var splitViewOrientation: SplitOrientation
+#if os(macOS)
+    @Published private(set) var poppedOutTabIDs: Set<UUID>
+#endif
+    @Published private var splitViewFractions: [UUID: CGFloat]
 
     var shouldShowProgress: Bool {
         guard let tab = currentTab, tab.kind == .web else { return false }
@@ -83,6 +100,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
         currentTab?.kind == .web
     }
 
+    var activeWebViewTabIDs: [UUID] {
+        let identifiers = computeActiveWebViewTabIDs()
+        ensureSplitFractions(for: identifiers)
+        return identifiers
+    }
+
     private let settings: BrowserSettings
     private var hasLoadedInitialPage = false
     private var webViews: [UUID: WKWebView]
@@ -92,12 +115,14 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private var closedTabHistory: [ClosedTabSnapshot]
 #if os(macOS)
     private var tabSidebarAppearances: [UUID: BrowserSidebarAppearance]
+    private var popOutControllers: [UUID: PopOutWindowController]
 #endif
 
     init(settings: BrowserSettings) {
         self.settings = settings
         self.tabs = []
         self.sidebarAppearance = .default
+        self.splitViewTabIDs = []
         self.webViews = [:]
         self.webViewToTabID = [:]
         self.progressObservations = [:]
@@ -105,7 +130,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.closedTabHistory = []
 #if os(macOS)
         self.tabSidebarAppearances = [:]
+        self.poppedOutTabIDs = []
+        self.popOutControllers = [:]
 #endif
+        self.splitViewOrientation = .horizontal
+        self.splitViewFractions = [:]
         super.init()
     }
 
@@ -167,6 +196,94 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
     }
 
+    func isTabInSplitView(_ id: UUID) -> Bool {
+        splitViewTabIDs.contains(id)
+    }
+
+    func splitFractions(for tabIDs: [UUID]) -> [UUID: CGFloat] {
+        ensureSplitFractions(for: tabIDs)
+        return tabIDs.reduce(into: [:]) { result, id in
+            result[id] = splitViewFractions[id] ?? 0
+        }
+    }
+
+    func adjustSplit(after index: Int, by delta: CGFloat, tabIDs: [UUID]) {
+        guard tabIDs.count > 1,
+              index >= 0,
+              index < tabIDs.count - 1 else { return }
+
+        ensureSplitFractions(for: tabIDs)
+
+        let leadingID = tabIDs[index]
+        let trailingID = tabIDs[index + 1]
+        guard let leadingValue = splitViewFractions[leadingID],
+              let trailingValue = splitViewFractions[trailingID] else { return }
+
+        let combined = max(0, leadingValue + trailingValue)
+        guard combined > 0 else { return }
+
+        let minFraction = min(max(0.05, 1.0 / CGFloat(tabIDs.count * 5)), combined / 2)
+
+        var newLeading = leadingValue + delta
+        var newTrailing = trailingValue - delta
+
+        if newLeading < minFraction {
+            newLeading = minFraction
+            newTrailing = combined - newLeading
+        }
+
+        if newTrailing < minFraction {
+            newTrailing = minFraction
+            newLeading = combined - newTrailing
+        }
+
+        newLeading = min(max(newLeading, minFraction), combined - minFraction)
+        newTrailing = combined - newLeading
+
+        splitViewFractions[leadingID] = newLeading
+        splitViewFractions[trailingID] = newTrailing
+
+        normalizeSplitFractions(for: tabIDs)
+    }
+
+    func toggleSplitOrientation() {
+        splitViewOrientation = splitViewOrientation == .horizontal ? .vertical : .horizontal
+    }
+
+    func toggleSplitView(for id: UUID) {
+        guard canShowTabInSplitView(id) else { return }
+        if let index = splitViewTabIDs.firstIndex(of: id) {
+            splitViewTabIDs.remove(at: index)
+        } else {
+            splitViewTabIDs.append(id)
+        }
+        sanitizeSplitViewTabs()
+    }
+
+    func canShowTabInSplitView(_ id: UUID) -> Bool {
+        guard id != selectedTabID else { return false }
+        return canDisplayTabInPrimaryArea(id)
+    }
+
+#if os(macOS)
+    func togglePopOut(for id: UUID) {
+        if isTabPoppedOut(id) {
+            restoreTabFromPopOut(id)
+            selectedTabID = id
+        } else {
+            popOutTab(id)
+        }
+    }
+
+    func canPopOutTab(_ id: UUID) -> Bool {
+        canDisplayTabInPrimaryArea(id)
+    }
+#else
+    func togglePopOut(for id: UUID) {}
+
+    func canPopOutTab(_ id: UUID) -> Bool { false }
+#endif
+
     func selectTab(_ id: UUID) {
         guard tabs.contains(where: { $0.id == id }) else { return }
         selectedTabID = id
@@ -176,6 +293,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         let tab = tabs[index]
         recordClosedTab(for: id, tab: tab)
+#if os(macOS)
+        if isTabPoppedOut(id) {
+            restoreTabFromPopOut(id)
+        }
+#endif
+        splitViewTabIDs.removeAll { $0 == id }
         tabs.remove(at: index)
         cleanupWebView(for: id)
 
@@ -190,6 +313,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         if tabs.isEmpty {
             openNewTab()
         }
+
+        sanitizeSplitViewTabs()
     }
 
     func closeCurrentTab() {
@@ -294,6 +419,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         tabs[index].canGoBack = false
         tabs[index].canGoForward = false
         tabs[index].isLoading = true
+#if os(macOS)
+        updatePopOutWindowTitle(for: id)
+#endif
         pendingURLs[id] = url
         _ = makeConfiguredWebView(for: id)
         attemptToLoadPendingURL(for: id)
@@ -409,6 +537,117 @@ final class BrowserViewModel: NSObject, ObservableObject {
         tabs.first(where: { $0.id == id })?.kind == .web
     }
 
+    func isTabPoppedOut(_ id: UUID) -> Bool {
+#if os(macOS)
+        return poppedOutTabIDs.contains(id)
+#else
+        return false
+#endif
+    }
+
+    private func canDisplayTabInPrimaryArea(_ id: UUID) -> Bool {
+        guard let tab = tabs.first(where: { $0.id == id }) else { return false }
+        guard tab.kind == .web else { return false }
+        return !isTabPoppedOut(id)
+    }
+
+    private func sanitizeSplitViewTabs() {
+        var seen: Set<UUID> = []
+        splitViewTabIDs = splitViewTabIDs.filter { id in
+            guard id != selectedTabID,
+                  let tab = tabs.first(where: { $0.id == id }),
+                  tab.kind == .web else { return false }
+#if os(macOS)
+            guard !poppedOutTabIDs.contains(id) else { return false }
+#endif
+            if seen.contains(id) {
+                return false
+            }
+            seen.insert(id)
+            return true
+        }
+        ensureSplitFractions(for: computeActiveWebViewTabIDs())
+    }
+
+    private func computeActiveWebViewTabIDs() -> [UUID] {
+        var identifiers: [UUID] = []
+        if let selectedTabID, canDisplayTabInPrimaryArea(selectedTabID) {
+            identifiers.append(selectedTabID)
+        }
+        for id in splitViewTabIDs {
+            guard id != selectedTabID, canDisplayTabInPrimaryArea(id) else { continue }
+            identifiers.append(id)
+        }
+        return identifiers
+    }
+
+    private func ensureSplitFractions(for tabIDs: [UUID]) {
+        guard !tabIDs.isEmpty else {
+            if !splitViewFractions.isEmpty {
+                splitViewFractions = [:]
+            }
+            return
+        }
+
+        var fractions: [UUID: CGFloat] = [:]
+        var needsEqualDistribution = false
+        for id in tabIDs {
+            if let value = splitViewFractions[id], value > 0 {
+                fractions[id] = value
+            } else {
+                needsEqualDistribution = true
+                fractions[id] = 0
+            }
+        }
+
+        if needsEqualDistribution {
+            let equal = 1.0 / CGFloat(tabIDs.count)
+            for id in tabIDs {
+                fractions[id] = equal
+            }
+        } else {
+            let total = fractions.values.reduce(0, +)
+            if total <= 0 {
+                let equal = 1.0 / CGFloat(tabIDs.count)
+                for id in tabIDs {
+                    fractions[id] = equal
+                }
+            } else {
+                for id in tabIDs {
+                    fractions[id] = (fractions[id] ?? 0) / total
+                }
+            }
+        }
+
+        var changed = splitViewFractions.count != fractions.count
+        if !changed {
+            for (id, value) in fractions {
+                guard let existing = splitViewFractions[id] else {
+                    changed = true
+                    break
+                }
+                if abs(existing - value) > 0.0001 {
+                    changed = true
+                    break
+                }
+            }
+        }
+
+        if changed {
+            splitViewFractions = fractions
+        }
+    }
+
+    private func normalizeSplitFractions(for tabIDs: [UUID]) {
+        let total = tabIDs.reduce(into: 0 as CGFloat) { result, id in
+            result += splitViewFractions[id] ?? 0
+        }
+        guard total > 0 else { return }
+        for id in tabIDs {
+            splitViewFractions[id] = (splitViewFractions[id] ?? 0) / total
+        }
+    }
+
     private func showNativeHome(in id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs[index].kind = .nativeHome
@@ -421,6 +660,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
         tabs[index].currentURL = nil
         pendingURLs.removeValue(forKey: id)
         cleanupWebView(for: id)
+        splitViewTabIDs.removeAll { $0 == id }
+#if os(macOS)
+        updatePopOutWindowTitle(for: id)
+#endif
+        sanitizeSplitViewTabs()
     }
 
     private func defaultTitle(for kind: TabState.Kind) -> String {
@@ -578,6 +822,65 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
     }
 
+    private func popOutTab(_ id: UUID) {
+        guard canPopOutTab(id), !isTabPoppedOut(id) else { return }
+        let webView = makeConfiguredWebView(for: id)
+        let controller = PopOutWindowController(
+            viewModel: self,
+            tabID: id,
+            webView: webView,
+            title: tabDisplayTitle(for: id)
+        )
+        popOutControllers[id] = controller
+        poppedOutTabIDs.insert(id)
+        splitViewTabIDs.removeAll { $0 == id }
+        if selectedTabID == id {
+            selectedTabID = nextAvailableTab(excluding: id)
+        }
+        controller.show()
+    }
+
+    private func restoreTabFromPopOut(_ id: UUID) {
+        guard let controller = popOutControllers[id] else {
+            poppedOutTabIDs.remove(id)
+            sanitizeSplitViewTabs()
+            return
+        }
+        poppedOutTabIDs.remove(id)
+        controller.closeForRestoration()
+    }
+
+    fileprivate func finalizePopOutRestoration(for id: UUID) {
+        popOutControllers.removeValue(forKey: id)
+        sanitizeSplitViewTabs()
+        updateSidebarAppearanceForSelection()
+    }
+
+    fileprivate func handlePopOutWindowClosed(for id: UUID) {
+        poppedOutTabIDs.remove(id)
+        popOutControllers.removeValue(forKey: id)
+        sanitizeSplitViewTabs()
+        if selectedTabID == nil || selectedTabID == id {
+            selectedTabID = id
+        }
+    }
+
+    private func nextAvailableTab(excluding id: UUID) -> UUID? {
+        tabs.first { candidate in
+            candidate.id != id && !isTabPoppedOut(candidate.id)
+        }?.id
+    }
+
+    private func updatePopOutWindowTitle(for id: UUID) {
+        guard let controller = popOutControllers[id] else { return }
+        controller.updateTitle(tabDisplayTitle(for: id))
+    }
+
+    private func tabDisplayTitle(for id: UUID) -> String {
+        guard let tab = tabs.first(where: { $0.id == id }) else { return "" }
+        return tab.displayTitle
+    }
+
     private static func nsColor(fromCSSColorString css: String) -> NSColor? {
         let trimmed = css.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.lowercased().hasPrefix("rgb") else { return nil }
@@ -683,6 +986,7 @@ extension BrowserViewModel: WKNavigationDelegate {
         tabs[index].title = webView.title ?? tabs[index].title
 #if os(macOS)
         captureSidebarAppearance(from: webView, for: tabID)
+        updatePopOutWindowTitle(for: tabID)
 #endif
     }
 
@@ -717,3 +1021,72 @@ extension BrowserViewModel: WKUIDelegate {
         return nil
     }
 }
+
+#if os(macOS)
+private final class PopOutWindowController: NSObject, NSWindowDelegate {
+    weak var viewModel: BrowserViewModel?
+    let tabID: UUID
+    let window: NSWindow
+    let webView: WKWebView
+    var isRestoring = false
+
+    init(viewModel: BrowserViewModel, tabID: UUID, webView: WKWebView, title: String) {
+        self.viewModel = viewModel
+        self.tabID = tabID
+        self.webView = webView
+        self.window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1024, height: 720),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        super.init()
+
+        window.title = title
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+
+        if window.contentView == nil {
+            window.contentView = NSView()
+        }
+
+        attachWebView()
+    }
+
+    func show() {
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func updateTitle(_ title: String) {
+        window.title = title
+    }
+
+    func closeForRestoration() {
+        isRestoring = true
+        window.close()
+    }
+
+    private func attachWebView() {
+        guard let contentView = window.contentView else { return }
+        webView.removeFromSuperview()
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        ])
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        webView.removeFromSuperview()
+        if isRestoring {
+            viewModel?.finalizePopOutRestoration(for: tabID)
+        } else {
+            viewModel?.handlePopOutWindowClosed(for: tabID)
+        }
+    }
+}
+#endif
