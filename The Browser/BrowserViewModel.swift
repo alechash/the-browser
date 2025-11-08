@@ -590,20 +590,32 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
 
         var fractions: [UUID: CGFloat] = [:]
+        var needsEqualDistribution = false
         for id in tabIDs {
-            let value = max(splitViewFractions[id] ?? 0, 0)
-            fractions[id] = value
+            if let value = splitViewFractions[id], value > 0 {
+                fractions[id] = value
+            } else {
+                needsEqualDistribution = true
+                fractions[id] = 0
+            }
         }
 
-        let total = fractions.values.reduce(0, +)
-        if total <= 0 {
+        if needsEqualDistribution {
             let equal = 1.0 / CGFloat(tabIDs.count)
             for id in tabIDs {
                 fractions[id] = equal
             }
         } else {
-            for id in tabIDs {
-                fractions[id] = (fractions[id] ?? 0) / total
+            let total = fractions.values.reduce(0, +)
+            if total <= 0 {
+                let equal = 1.0 / CGFloat(tabIDs.count)
+                for id in tabIDs {
+                    fractions[id] = equal
+                }
+            } else {
+                for id in tabIDs {
+                    fractions[id] = (fractions[id] ?? 0) / total
+                }
             }
         }
 
