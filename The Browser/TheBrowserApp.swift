@@ -41,7 +41,12 @@ struct BrowserView: View {
 #if os(macOS)
         .background(MacWindowConfigurator())
 #endif
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+#if os(macOS)
+        .ignoresSafeArea()
+#else
         .ignoresSafeArea(.keyboard, edges: .bottom)
+#endif
         .onAppear {
             viewModel.loadInitialPageIfNeeded()
         }
@@ -873,7 +878,9 @@ private extension Color {
 
     static var browserSidebarBackground: Color {
 #if os(macOS)
-        Color(nsColor: .controlBackgroundColor)
+        let windowColor = NSColor.windowBackgroundColor
+        let accentBlended = windowColor.blended(withFraction: 0.08, of: NSColor.controlAccentColor) ?? windowColor
+        return Color(nsColor: accentBlended)
 #else
         Color(.systemGroupedBackground)
 #endif
