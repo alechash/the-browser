@@ -75,6 +75,9 @@ struct BrowserView: View {
         .onAppear {
             viewModel.loadInitialPageIfNeeded()
         }
+        .onOpenURL { url in
+            viewModel.handleIncomingURL(url)
+        }
 #if os(macOS)
         .focusedSceneValue(\.browserActions, commandContext)
 #endif
@@ -274,6 +277,8 @@ private struct BrowserSidebar: View {
             Spacer()
 
             HStack(spacing: 12) {
+                shareControl
+
                 iconControlButton(
                     systemImage: "ladybug",
                     help: "Web Inspector",
@@ -323,6 +328,30 @@ private struct BrowserSidebar: View {
                         .foregroundStyle(appearance.secondary)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var shareControl: some View {
+        if let url = viewModel.currentURL, viewModel.isCurrentTabDisplayingWebContent {
+            ShareLink(item: url) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 42, height: 42)
+                    .foregroundStyle(appearance.primary)
+            }
+            .buttonStyle(.plain)
+            .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
+#if os(macOS)
+            .help("Share")
+#endif
+        } else {
+            iconControlButton(
+                systemImage: "square.and.arrow.up",
+                help: "Share",
+                isEnabled: false,
+                action: {}
+            )
         }
     }
 

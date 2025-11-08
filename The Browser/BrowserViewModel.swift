@@ -35,7 +35,24 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let url: URL?
     }
 
-    @Published private(set) var tabs: [TabState]
+    private struct PersistedTab: Codable {
+        enum Kind: String, Codable {
+            case nativeHome
+            case web
+        }
+
+        let kind: Kind
+        let url: String?
+    }
+
+    private struct PersistedSession: Codable {
+        let tabs: [PersistedTab]
+        let selectedIndex: Int?
+    }
+
+    @Published private(set) var tabs: [TabState] {
+        didSet { persistSessionIfNeeded() }
+    }
     @Published var selectedTabID: UUID? {
         didSet {
             sanitizeSplitViewTabs()
@@ -45,6 +62,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
             }
 #endif
             updateSidebarAppearanceForSelection()
+            persistSessionIfNeeded()
         }
     }
     @Published var sidebarAppearance: BrowserSidebarAppearance
@@ -107,7 +125,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     private let settings: BrowserSettings
+    private let sessionDefaults: UserDefaults
+    private static let sessionStorageKey = "browser.session.state"
     private var hasLoadedInitialPage = false
+    private var isRestoringSession = false
     private var webViews: [UUID: WKWebView]
     private var webViewToTabID: [ObjectIdentifier: UUID]
     private var progressObservations: [UUID: NSKeyValueObservation]
@@ -118,8 +139,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private var popOutControllers: [UUID: PopOutWindowController]
 #endif
 
-    init(settings: BrowserSettings) {
+    init(settings: BrowserSettings, userDefaults: UserDefaults = .standard) {
         self.settings = settings
+        self.sessionDefaults = userDefaults
         self.tabs = []
         self.sidebarAppearance = .default
         self.splitViewTabIDs = []
@@ -136,6 +158,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.splitViewOrientation = .horizontal
         self.splitViewFractions = [:]
         super.init()
+        restorePreviousSessionIfNeeded()
     }
 
     deinit {
@@ -165,7 +188,32 @@ final class BrowserViewModel: NSObject, ObservableObject {
     func loadInitialPageIfNeeded() {
         guard !hasLoadedInitialPage else { return }
         hasLoadedInitialPage = true
-        openNewTab(with: homeURL)
+        if tabs.isEmpty {
+            openNewTab(with: homeURL)
+        }
+    }
+
+    func handleIncomingURL(_ url: URL) {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
+
+#if os(macOS)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+#endif
+
+        hasLoadedInitialPage = true
+
+        if tabs.isEmpty {
+            openNewTab(with: url)
+            return
+        }
+
+        if let selectedTabID,
+           let index = tabs.firstIndex(where: { $0.id == selectedTabID }),
+           tabs[index].kind != .web {
+            load(url: url, in: selectedTabID)
+        } else {
+            openNewTab(with: url)
+        }
     }
 
     func openNewTab() {
@@ -739,6 +787,121 @@ final class BrowserViewModel: NSObject, ObservableObject {
         if closedTabHistory.count > 20 {
             closedTabHistory.removeFirst(closedTabHistory.count - 20)
         }
+    }
+
+    private func resolvedURL(for tabID: UUID, tab: TabState) -> URL? {
+        if let webViewURL = webViews[tabID]?.url {
+            return webViewURL
+        }
+
+        if let currentURL = tab.currentURL {
+            return currentURL
+        }
+
+        return BrowserViewModel.url(from: tab.addressBarText)
+    }
+
+    private func persistSessionIfNeeded() {
+        guard !isRestoringSession else { return }
+        persistSession()
+    }
+
+    private func persistSession() {
+        let persistedTabs = tabs.map { tab -> PersistedTab in
+            let urlString = resolvedURL(for: tab.id, tab: tab)?.absoluteString
+            let persistedKind: PersistedTab.Kind = tab.kind == .web ? .web : .nativeHome
+            return PersistedTab(kind: persistedKind, url: urlString)
+        }
+
+        let selectedIndex: Int?
+        if let selectedID = selectedTabID,
+           let index = tabs.firstIndex(where: { $0.id == selectedID }) {
+            selectedIndex = index
+        } else {
+            selectedIndex = nil
+        }
+
+        let session = PersistedSession(tabs: persistedTabs, selectedIndex: selectedIndex)
+
+        guard !session.tabs.isEmpty else {
+            sessionDefaults.removeObject(forKey: Self.sessionStorageKey)
+            return
+        }
+
+        if let data = try? JSONEncoder().encode(session) {
+            sessionDefaults.set(data, forKey: Self.sessionStorageKey)
+        }
+    }
+
+    private func restorePreviousSessionIfNeeded() {
+        guard
+            let data = sessionDefaults.data(forKey: Self.sessionStorageKey),
+            let session = try? JSONDecoder().decode(PersistedSession.self, from: data),
+            !session.tabs.isEmpty
+        else {
+            return
+        }
+
+        isRestoringSession = true
+
+        var restoredTabs: [TabState] = []
+        var restoredTabIDs: [UUID] = []
+
+        for persisted in session.tabs {
+            let id = UUID()
+            let url = persisted.url.flatMap { URL(string: $0) }
+            let kind: TabState.Kind
+            if persisted.kind == .web, url == nil {
+                kind = .nativeHome
+            } else {
+                kind = persisted.kind == .web ? .web : .nativeHome
+            }
+            let addressText = url?.absoluteString ?? ""
+
+            let tab = TabState(
+                id: id,
+                title: defaultTitle(for: kind),
+                addressBarText: addressText,
+                canGoBack: false,
+                canGoForward: false,
+                isLoading: false,
+                progress: 0,
+                currentURL: url,
+                kind: kind
+            )
+
+            restoredTabs.append(tab)
+            restoredTabIDs.append(id)
+        }
+
+        tabs = restoredTabs
+
+        if let selectedIndex = session.selectedIndex,
+           selectedIndex >= 0,
+           selectedIndex < restoredTabIDs.count {
+            selectedTabID = restoredTabIDs[selectedIndex]
+        } else {
+            selectedTabID = restoredTabIDs.first
+        }
+
+        hasLoadedInitialPage = true
+
+        for (index, persisted) in session.tabs.enumerated() {
+            guard persisted.kind == .web,
+                  let urlString = persisted.url,
+                  let url = URL(string: urlString)
+            else { continue }
+
+            let tabID = restoredTabIDs[index]
+            pendingURLs[tabID] = url
+            let webView = makeConfiguredWebView(for: tabID)
+            if webView.url == nil {
+                attemptToLoadPendingURL(for: tabID)
+            }
+        }
+
+        isRestoringSession = false
+        persistSession()
     }
 
     private func cleanupWebView(for tabID: UUID) {
