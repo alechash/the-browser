@@ -16,12 +16,14 @@ final class BrowserViewModel: NSObject, ObservableObject {
         var isLoading: Bool
         var progress: Double
         var currentURL: URL?
+        var showsWelcomeContent: Bool
     }
 
     private struct ClosedTabSnapshot {
         let title: String
         let addressBarText: String
         let url: URL?
+        let showsWelcomeContent: Bool
     }
 
     @Published private(set) var tabs: [TabState]
@@ -133,21 +135,25 @@ final class BrowserViewModel: NSObject, ObservableObject {
         openNewTab(with: homeURL)
     }
 
-    func openNewTab(with url: URL) {
+    func openNewTab(with url: URL? = nil) {
         let tabID = UUID()
+        let showsWelcome = (url == nil)
         let newTab = TabState(
             id: tabID,
             title: "New Tab",
-            addressBarText: url.absoluteString,
+            addressBarText: url?.absoluteString ?? "",
             canGoBack: false,
             canGoForward: false,
             isLoading: false,
-            progress: 0,
-            currentURL: nil
+            progress: showsWelcome ? 1 : 0,
+            currentURL: nil,
+            showsWelcomeContent: showsWelcome
         )
 
         tabs.append(newTab)
-        pendingURLs[tabID] = url
+        if let url {
+            pendingURLs[tabID] = url
+        }
         _ = makeConfiguredWebView(for: tabID)
         selectedTabID = tabID
         attemptToLoadPendingURL(for: tabID)
@@ -188,7 +194,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
         let tabID = UUID()
         let targetURL = snapshot.url ?? homeURL
-        let addressText = snapshot.addressBarText.isEmpty ? targetURL.absoluteString : snapshot.addressBarText
+        let showsWelcome = snapshot.showsWelcomeContent && targetURL == nil
+        let addressText: String
+        if snapshot.addressBarText.isEmpty {
+            addressText = targetURL?.absoluteString ?? ""
+        } else {
+            addressText = snapshot.addressBarText
+        }
         let title = snapshot.title.isEmpty ? "New Tab" : snapshot.title
 
         let restoredTab = TabState(
@@ -198,12 +210,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
             canGoBack: false,
             canGoForward: false,
             isLoading: false,
-            progress: 0,
-            currentURL: snapshot.url
+            progress: showsWelcome ? 1 : 0,
+            currentURL: snapshot.url ?? targetURL,
+            showsWelcomeContent: showsWelcome
         )
 
         tabs.append(restoredTab)
-        pendingURLs[tabID] = targetURL
+        if let targetURL {
+            pendingURLs[tabID] = targetURL
+        }
         _ = makeConfiguredWebView(for: tabID)
         selectedTabID = tabID
         attemptToLoadPendingURL(for: tabID)
@@ -261,6 +276,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         tabs[index].addressBarText = url.absoluteString
         tabs[index].progress = 0
         tabs[index].currentURL = url
+        tabs[index].showsWelcomeContent = false
         pendingURLs[id] = url
         attemptToLoadPendingURL(for: id)
     }
@@ -292,7 +308,26 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     func goHome() {
-        load(url: homeURL)
+        guard let id = selectedTabID,
+              let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+
+        if let homeURL {
+            load(url: homeURL, in: id)
+        } else {
+            tabs[index].showsWelcomeContent = true
+            tabs[index].addressBarText = ""
+            tabs[index].currentURL = nil
+            tabs[index].title = "New Tab"
+            tabs[index].progress = 1
+            tabs[index].canGoBack = false
+            tabs[index].canGoForward = false
+            tabs[index].isLoading = false
+            pendingURLs.removeValue(forKey: id)
+            if let webView = webViews[id] {
+                webView.stopLoading()
+                webView.loadHTMLString("", baseURL: nil)
+            }
+        }
     }
 
     func openInspector() {
@@ -366,7 +401,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
         return webViews[id]
     }
 
-    private var homeURL: URL { settings.homePageURL }
+    private var homeURL: URL? { settings.homePageURL }
+
+    var showingWelcomeContent: Bool {
+        currentTab?.showsWelcomeContent ?? false
+    }
+
+    func tabShowsWelcomeContent(_ tabID: UUID) -> Bool {
+        tabs.first(where: { $0.id == tabID })?.showsWelcomeContent ?? false
+    }
 
     func makeConfiguredWebView(for tabID: UUID) -> WKWebView {
         if let webView = webViews[tabID] {
@@ -422,7 +465,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let snapshot = ClosedTabSnapshot(
             title: tab.title,
             addressBarText: tab.addressBarText,
-            url: url
+            url: url,
+            showsWelcomeContent: tab.showsWelcomeContent
         )
 
         closedTabHistory.append(snapshot)
@@ -628,6 +672,9 @@ extension BrowserViewModel: WKNavigationDelegate {
         tabs[index].canGoBack = webView.canGoBack
         tabs[index].canGoForward = webView.canGoForward
         tabs[index].currentURL = webView.url ?? tabs[index].currentURL
+        if !isLoading {
+            tabs[index].showsWelcomeContent = false
+        }
         if !isLoading {
             tabs[index].progress = 1
         }

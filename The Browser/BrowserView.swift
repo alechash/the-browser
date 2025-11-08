@@ -20,11 +20,17 @@ struct BrowserView: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            BrowserWebView(viewModel: viewModel)
-                .background(Color.browserBackground)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.leading, isWebContentFullscreen ? 0 : sidebarWidth)
-                .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
+            ZStack {
+                BrowserWebView(viewModel: viewModel)
+                if viewModel.showingWelcomeContent {
+                    HelloStartPage(openSettings: { isShowingSettings = true })
+                        .transition(.opacity)
+                }
+            }
+            .background(Color.browserBackground)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.leading, isWebContentFullscreen ? 0 : sidebarWidth)
+            .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
 
             if !isWebContentFullscreen {
                 BrowserSidebar(
@@ -133,21 +139,7 @@ private struct BrowserSidebar: View {
 
             Spacer()
 
-            VStack(alignment: .leading, spacing: 12) {
-                glassButton(
-                    title: "Web Inspector",
-                    systemImage: "ladybug",
-                    action: viewModel.openInspector,
-                    isEnabled: viewModel.currentTabExists
-                )
-
-                glassButton(
-                    title: "Settings",
-                    systemImage: "gearshape",
-                    action: { isShowingSettings = true },
-                    isEnabled: true
-                )
-            }
+            utilityButtons
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -315,19 +307,75 @@ private struct BrowserSidebar: View {
         }
     }
 
-    private func glassButton(title: String, systemImage: String, action: @escaping () -> Void, isEnabled: Bool) -> some View {
+    private var utilityButtons: some View {
+        HStack(spacing: 12) {
+            Spacer()
+            iconButton(
+                systemImage: "ladybug",
+                help: "Web Inspector",
+                action: viewModel.openInspector,
+                isEnabled: viewModel.currentTabExists
+            )
+
+            iconButton(
+                systemImage: "gearshape",
+                help: "Settings",
+                action: { isShowingSettings = true },
+                isEnabled: true
+            )
+        }
+    }
+
+    private func iconButton(systemImage: String, help: String, action: @escaping () -> Void, isEnabled: Bool) -> some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .labelStyle(.leadingIcon)
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(appearance.primary)
-                .padding(.vertical, 12)
-                .padding(.horizontal, 14)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(width: 36, height: 36)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 18, includeShadow: false)
+        .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 12, includeShadow: false)
         .opacity(isEnabled ? 1 : 0.45)
+#if os(macOS)
+        .help(help)
+#endif
+    }
+}
+
+private struct HelloStartPage: View {
+    let openSettings: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.browserBackground
+                .ignoresSafeArea()
+
+            VStack(spacing: 18) {
+                Text("Hello")
+                    .font(.system(size: 64, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.browserAccent)
+
+                Text("Use the address bar to browse or pick a custom home page in Settings.")
+                    .font(.title3)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Color.white.opacity(0.75))
+                    .frame(maxWidth: 360)
+
+                Button(action: openSettings) {
+                    Label("Open Settings", systemImage: "gearshape")
+                        .font(.headline)
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 20)
+                        .background(
+                            Capsule().fill(Color.browserAccent.opacity(0.85))
+                        )
+                        .foregroundStyle(Color.white)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(40)
+        }
     }
 }
 

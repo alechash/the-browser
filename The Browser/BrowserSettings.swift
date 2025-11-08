@@ -2,44 +2,55 @@ import SwiftUI
 import Combine
 
 final class BrowserSettings: ObservableObject {
-    enum SearchEngine: String, CaseIterable, Identifiable {
-        case google
-        case duckDuckGo
-        case bing
+    struct SearchEngine: Identifiable, Codable, Equatable {
+        let id: String
+        var name: String
+        var urlTemplate: String
+        var isCustom: Bool
+
+        func searchURL(for query: String) -> URL {
+            let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+            let replaced = urlTemplate.replacingOccurrences(of: "{query}", with: encodedQuery)
+            if let url = URL(string: replaced) {
+                return url
+            }
+            // Fallback to Google if the template is invalid at runtime
+            return URL(string: "https://www.google.com/search?q=\(encodedQuery)")!
+        }
+    }
+
+    enum HomePageMode: String, CaseIterable, Identifiable {
+        case welcome
+        case custom
 
         var id: String { rawValue }
 
         var displayName: String {
             switch self {
-            case .google:
-                return "Google"
-            case .duckDuckGo:
-                return "DuckDuckGo"
-            case .bing:
-                return "Bing"
+            case .welcome:
+                return "Hello start page"
+            case .custom:
+                return "Custom website"
             }
-        }
-
-        fileprivate func searchURL(for query: String) -> URL {
-            let base: String
-            switch self {
-            case .google:
-                base = "https://www.google.com/search"
-            case .duckDuckGo:
-                base = "https://duckduckgo.com/"
-            case .bing:
-                base = "https://www.bing.com/search"
-            }
-
-            var components = URLComponents(string: base)!
-            components.queryItems = [URLQueryItem(name: "q", value: query)]
-            return components.url ?? URL(string: base)!
         }
     }
 
-    @Published var defaultSearchEngine: SearchEngine {
+    @Published var defaultSearchEngineID: String {
         didSet {
-            userDefaults.set(defaultSearchEngine.rawValue, forKey: Keys.searchEngine)
+            userDefaults.set(defaultSearchEngineID, forKey: Keys.searchEngineID)
+        }
+    }
+
+    @Published var customSearchEngines: [SearchEngine] {
+        didSet {
+            persistCustomSearchEngines()
+            ensureValidDefaultSearchEngine()
+        }
+    }
+
+    @Published var homePageMode: HomePageMode {
+        didSet {
+            userDefaults.set(homePageMode.rawValue, forKey: Keys.homePageMode)
         }
     }
 
@@ -51,21 +62,89 @@ final class BrowserSettings: ObservableObject {
 
     private let userDefaults: UserDefaults
 
+    private static let builtInSearchEngines: [SearchEngine] = [
+        SearchEngine(id: "google", name: "Google", urlTemplate: "https://www.google.com/search?q={query}", isCustom: false),
+        SearchEngine(id: "duckDuckGo", name: "DuckDuckGo", urlTemplate: "https://duckduckgo.com/?q={query}", isCustom: false),
+        SearchEngine(id: "bing", name: "Bing", urlTemplate: "https://www.bing.com/search?q={query}", isCustom: false),
+        SearchEngine(id: "perplexity", name: "Perplexity", urlTemplate: "https://www.perplexity.ai/search?q={query}", isCustom: false),
+        SearchEngine(id: "you", name: "You.com", urlTemplate: "https://you.com/search?q={query}", isCustom: false),
+        SearchEngine(id: "phind", name: "Phind", urlTemplate: "https://www.phind.com/search?q={query}", isCustom: false)
+    ]
+
+    private static let defaultSearchEngineID = builtInSearchEngines.first?.id ?? "google"
+
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
 
-        if let rawValue = userDefaults.string(forKey: Keys.searchEngine),
-           let storedEngine = SearchEngine(rawValue: rawValue) {
-            defaultSearchEngine = storedEngine
+        if let storedID = userDefaults.string(forKey: Keys.searchEngineID) {
+            defaultSearchEngineID = storedID
         } else {
-            defaultSearchEngine = .google
+            defaultSearchEngineID = Self.defaultSearchEngineID
         }
 
-        if let storedHome = userDefaults.string(forKey: Keys.homePage), !storedHome.isEmpty {
-            homePage = storedHome
+        if let data = userDefaults.data(forKey: Keys.customSearchEngines),
+           let decoded = try? JSONDecoder().decode([SearchEngine].self, from: data) {
+            customSearchEngines = decoded
         } else {
-            homePage = "https://www.apple.com"
+            customSearchEngines = []
         }
+
+        if let storedMode = userDefaults.string(forKey: Keys.homePageMode),
+           let mode = HomePageMode(rawValue: storedMode) {
+            homePageMode = mode
+        } else if let storedHome = userDefaults.string(forKey: Keys.homePage), !storedHome.isEmpty {
+            homePageMode = .custom
+        } else {
+            homePageMode = .welcome
+        }
+
+        homePage = userDefaults.string(forKey: Keys.homePage) ?? ""
+
+        ensureValidDefaultSearchEngine()
+    }
+
+    var availableSearchEngines: [SearchEngine] {
+        Self.builtInSearchEngines + customSearchEngines
+    }
+
+    var defaultSearchEngine: SearchEngine {
+        availableSearchEngines.first(where: { $0.id == defaultSearchEngineID }) ?? Self.builtInSearchEngines[0]
+    }
+
+    func searchURL(for query: String) -> URL {
+        defaultSearchEngine.searchURL(for: query)
+    }
+
+    func addCustomSearchEngine(name: String, template: String) -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTemplate = template.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedName.isEmpty,
+              trimmedTemplate.contains("{query}"),
+              URL(string: trimmedTemplate.replacingOccurrences(of: "{query}", with: "test")) != nil else {
+            return false
+        }
+
+        let newEngine = SearchEngine(
+            id: UUID().uuidString,
+            name: trimmedName,
+            urlTemplate: trimmedTemplate,
+            isCustom: true
+        )
+
+        customSearchEngines.append(newEngine)
+        defaultSearchEngineID = newEngine.id
+        return true
+    }
+
+    func removeCustomSearchEngine(_ engine: SearchEngine) {
+        if let index = customSearchEngines.firstIndex(of: engine) {
+            customSearchEngines.remove(at: index)
+        }
+    }
+
+    func removeCustomSearchEngines(at offsets: IndexSet) {
+        customSearchEngines.remove(atOffsets: offsets)
     }
 
     func applyHomePageInput(_ input: String) -> Bool {
@@ -74,31 +153,53 @@ final class BrowserSettings: ObservableObject {
 
         if BrowserViewModel.url(from: trimmed) != nil {
             homePage = trimmed
+            homePageMode = .custom
             return true
         }
 
         if let components = URLComponents(string: "https://\(trimmed)"),
            let host = components.host, !host.isEmpty {
             homePage = components.string ?? trimmed
+            homePageMode = .custom
             return true
         }
 
         return false
     }
 
-    func searchURL(for query: String) -> URL {
-        defaultSearchEngine.searchURL(for: query)
+    func useWelcomeHomePage() {
+        homePageMode = .welcome
     }
 
-    var homePageURL: URL {
+    var homePageURL: URL? {
+        guard homePageMode == .custom else { return nil }
         if let url = BrowserViewModel.url(from: homePage) {
             return url
         }
-        return URL(string: "https://www.apple.com")!
+        if let url = URL(string: homePage), url.scheme != nil {
+            return url
+        }
+        return nil
+    }
+
+    private func persistCustomSearchEngines() {
+        let encoder = JSONEncoder()
+        if let data = try? encoder.encode(customSearchEngines) {
+            userDefaults.set(data, forKey: Keys.customSearchEngines)
+        }
+    }
+
+    private func ensureValidDefaultSearchEngine() {
+        if availableSearchEngines.contains(where: { $0.id == defaultSearchEngineID }) {
+            return
+        }
+        defaultSearchEngineID = Self.defaultSearchEngineID
     }
 
     private enum Keys {
-        static let searchEngine = "BrowserSearchEngine"
+        static let searchEngineID = "BrowserSearchEngine"
+        static let customSearchEngines = "BrowserCustomSearchEngines"
         static let homePage = "BrowserHomePage"
+        static let homePageMode = "BrowserHomePageMode"
     }
 }
