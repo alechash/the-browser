@@ -25,17 +25,50 @@ struct TheBrowserApp: App {
 }
 
 struct BrowserView: View {
-    @StateObject private var viewModel = BrowserViewModel()
+    @StateObject private var settings: BrowserSettings
+    @StateObject private var viewModel: BrowserViewModel
     @FocusState private var isAddressFocused: Bool
+    @State private var isShowingSettings = false
+    @State private var isWebContentFullscreen = false
+
+    private let sidebarWidth: CGFloat = 280
+
+    init() {
+        let settings = BrowserSettings()
+        _settings = StateObject(wrappedValue: settings)
+        _viewModel = StateObject(wrappedValue: BrowserViewModel(settings: settings))
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-                .frame(width: 280)
-                .background(Color.browserSidebarBackground)
-
+        ZStack(alignment: .leading) {
             BrowserWebView(viewModel: viewModel)
                 .background(Color.browserBackground)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.leading, isWebContentFullscreen ? 0 : sidebarWidth)
+                .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
+
+            if !isWebContentFullscreen {
+                sidebar
+                    .frame(width: sidebarWidth)
+                    .background(Color.browserSidebarBackground)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+
+            if isWebContentFullscreen {
+                VStack {
+                    HStack {
+                        NavigationControlButton(
+                            symbol: "sidebar.leading",
+                            help: "Show Sidebar",
+                            isEnabled: true,
+                            action: { withAnimation { isWebContentFullscreen = false } }
+                        )
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(24)
+            }
         }
         .background(Color.browserBackground)
 #if os(macOS)
@@ -49,6 +82,9 @@ struct BrowserView: View {
 #endif
         .onAppear {
             viewModel.loadInitialPageIfNeeded()
+        }
+        .sheet(isPresented: $isShowingSettings) {
+            SettingsPanel(settings: settings)
         }
     }
 
@@ -109,6 +145,17 @@ struct BrowserView: View {
                 .buttonStyle(.plain)
                 .disabled(!viewModel.currentTabExists)
                 .opacity(viewModel.currentTabExists ? 1 : 0.4)
+
+                Button(action: { isShowingSettings = true }) {
+                    Label("Settings", systemImage: "gearshape")
+                        .labelStyle(.leadingIcon)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.browserSidebarButtonBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(16)
@@ -170,6 +217,13 @@ struct BrowserView: View {
                 help: "Home",
                 isEnabled: viewModel.currentTabExists,
                 action: viewModel.goHome
+            )
+
+            NavigationControlButton(
+                symbol: "arrow.up.left.and.arrow.down.right",
+                help: "Enter Fullscreen",
+                isEnabled: viewModel.currentTabExists,
+                action: { withAnimation { isWebContentFullscreen = true } }
             )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -413,6 +467,189 @@ private extension LabelStyle where Self == LeadingIconLabelStyle {
     static var leadingIcon: LeadingIconLabelStyle { LeadingIconLabelStyle() }
 }
 
+final class BrowserSettings: ObservableObject {
+    enum SearchEngine: String, CaseIterable, Identifiable {
+        case google
+        case duckDuckGo
+        case bing
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .google:
+                return "Google"
+            case .duckDuckGo:
+                return "DuckDuckGo"
+            case .bing:
+                return "Bing"
+            }
+        }
+
+        fileprivate func searchURL(for query: String) -> URL {
+            let base: String
+            switch self {
+            case .google:
+                base = "https://www.google.com/search"
+            case .duckDuckGo:
+                base = "https://duckduckgo.com/"
+            case .bing:
+                base = "https://www.bing.com/search"
+            }
+
+            var components = URLComponents(string: base)!
+            components.queryItems = [URLQueryItem(name: "q", value: query)]
+            return components.url ?? URL(string: base)!
+        }
+    }
+
+    @Published var defaultSearchEngine: SearchEngine {
+        didSet {
+            userDefaults.set(defaultSearchEngine.rawValue, forKey: Keys.searchEngine)
+        }
+    }
+
+    @Published var homePage: String {
+        didSet {
+            userDefaults.set(homePage, forKey: Keys.homePage)
+        }
+    }
+
+    private let userDefaults: UserDefaults
+
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+
+        if let rawValue = userDefaults.string(forKey: Keys.searchEngine),
+           let storedEngine = SearchEngine(rawValue: rawValue) {
+            defaultSearchEngine = storedEngine
+        } else {
+            defaultSearchEngine = .google
+        }
+
+        if let storedHome = userDefaults.string(forKey: Keys.homePage), !storedHome.isEmpty {
+            homePage = storedHome
+        } else {
+            homePage = BrowserSettings.fallbackHomePage
+        }
+    }
+
+    var homePageURL: URL {
+        BrowserSettings.normalizedHomePageURL(from: homePage) ?? URL(string: BrowserSettings.fallbackHomePage)!
+    }
+
+    func searchURL(for query: String) -> URL {
+        defaultSearchEngine.searchURL(for: query)
+    }
+
+    @discardableResult
+    func applyHomePageInput(_ input: String) -> Bool {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        guard let url = BrowserSettings.normalizedHomePageURL(from: trimmed) else {
+            return false
+        }
+
+        homePage = url.absoluteString
+        return true
+    }
+
+    private static func normalizedHomePageURL(from input: String) -> URL? {
+        if let directURL = URL(string: input), let scheme = directURL.scheme, !scheme.isEmpty {
+            return directURL
+        }
+
+        if let hostURL = BrowserSettings.makeHostURL(from: input) {
+            return hostURL
+        }
+
+        return nil
+    }
+
+    private static func makeHostURL(from input: String) -> URL? {
+        if input.contains(" ") { return nil }
+
+        let lowercased = input.lowercased()
+        let looksLikeHost = lowercased.contains(".") || lowercased.contains(":") || lowercased.contains("localhost")
+        guard looksLikeHost else { return nil }
+
+        return URL(string: "https://\(input)")
+    }
+
+    private enum Keys {
+        static let searchEngine = "BrowserSettings.searchEngine"
+        static let homePage = "BrowserSettings.homePage"
+    }
+
+    private static let fallbackHomePage = "https://www.apple.com"
+}
+
+struct SettingsPanel: View {
+    @ObservedObject var settings: BrowserSettings
+    @Environment(\.dismiss) private var dismiss
+    @State private var homePageDraft: String
+    @State private var validationMessage: String?
+
+    init(settings: BrowserSettings) {
+        self.settings = settings
+        _homePageDraft = State(initialValue: settings.homePage)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Default Search Engine") {
+                    Picker("Search Engine", selection: $settings.defaultSearchEngine) {
+                        ForEach(BrowserSettings.SearchEngine.allCases) { engine in
+                            Text(engine.displayName).tag(engine)
+                        }
+                    }
+#if os(iOS)
+                    .pickerStyle(.segmented)
+#endif
+                }
+
+                Section("Home Page") {
+                    TextField("Home page URL", text: $homePageDraft)
+#if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .disableAutocorrection(true)
+#endif
+                        .onSubmit(saveHomePage)
+
+                    if let validationMessage {
+                        Text(validationMessage)
+                            .font(.footnote)
+                            .foregroundStyle(Color.red)
+                    }
+
+                    Button("Save Home Page", action: saveHomePage)
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 4)
+                }
+            }
+            .frame(minWidth: 360, minHeight: 260)
+            .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func saveHomePage() {
+        if settings.applyHomePageInput(homePageDraft) {
+            validationMessage = nil
+            homePageDraft = settings.homePage
+        } else {
+            validationMessage = "Enter a valid URL or host name."
+        }
+    }
+}
+
 @MainActor
 final class BrowserViewModel: NSObject, ObservableObject {
     struct TabState: Identifiable, Equatable {
@@ -462,15 +699,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
         currentTab != nil
     }
 
-    private let homeURL: URL
+    private let settings: BrowserSettings
     private var hasLoadedInitialPage = false
     private var webViews: [UUID: WKWebView]
     private var webViewToTabID: [ObjectIdentifier: UUID]
     private var progressObservations: [UUID: NSKeyValueObservation]
     private var pendingURLs: [UUID: URL]
 
-    override init() {
-        self.homeURL = URL(string: "https://www.apple.com")!
+    init(settings: BrowserSettings) {
+        self.settings = settings
         self.tabs = []
         self.webViews = [:]
         self.webViewToTabID = [:]
@@ -550,7 +787,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         if let url = BrowserViewModel.url(from: input) {
             targetURL = url
         } else {
-            targetURL = BrowserViewModel.searchURL(for: input)
+            targetURL = settings.searchURL(for: input)
         }
 
         load(url: targetURL, in: id)
@@ -631,6 +868,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard let id = selectedTabID else { return nil }
         return tabs.first(where: { $0.id == id })
     }
+
+    private var homeURL: URL { settings.homePageURL }
 
     func makeConfiguredWebView(for tabID: UUID) -> WKWebView {
         if let webView = webViews[tabID] {
@@ -732,11 +971,6 @@ private extension BrowserViewModel {
         return URL(string: "https://\(input)")
     }
 
-    static func searchURL(for query: String) -> URL {
-        var components = URLComponents(string: "https://www.google.com/search")!
-        components.queryItems = [URLQueryItem(name: "q", value: query)]
-        return components.url!
-    }
 }
 
 extension BrowserViewModel: WKNavigationDelegate {
