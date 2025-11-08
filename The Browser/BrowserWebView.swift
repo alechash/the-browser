@@ -7,6 +7,12 @@ import AppKit
 #if os(macOS)
 struct BrowserWebView: NSViewRepresentable {
     @ObservedObject var viewModel: BrowserViewModel
+    let tabID: UUID?
+
+    init(viewModel: BrowserViewModel, tabID: UUID? = nil) {
+        self.viewModel = viewModel
+        self.tabID = tabID
+    }
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
@@ -15,12 +21,14 @@ struct BrowserWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        guard let tabID = viewModel.selectedTabID else {
+        let targetTabID = tabID ?? viewModel.selectedTabID
+
+        guard let tabID = targetTabID else {
             nsView.subviews.forEach { $0.removeFromSuperview() }
             return
         }
 
-        guard viewModel.isWebTab(tabID) else {
+        guard viewModel.isWebTab(tabID), !viewModel.isTabPoppedOut(tabID) else {
             nsView.subviews.forEach { $0.removeFromSuperview() }
             return
         }
@@ -43,6 +51,12 @@ struct BrowserWebView: NSViewRepresentable {
 #else
 struct BrowserWebView: UIViewRepresentable {
     @ObservedObject var viewModel: BrowserViewModel
+    let tabID: UUID?
+
+    init(viewModel: BrowserViewModel, tabID: UUID? = nil) {
+        self.viewModel = viewModel
+        self.tabID = tabID
+    }
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
@@ -51,12 +65,14 @@ struct BrowserWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
-        guard let tabID = viewModel.selectedTabID else {
+        let targetTabID = tabID ?? viewModel.selectedTabID
+
+        guard let tabID = targetTabID else {
             uiView.subviews.forEach { $0.removeFromSuperview() }
             return
         }
 
-        guard viewModel.isWebTab(tabID) else {
+        guard viewModel.isWebTab(tabID), !viewModel.isTabPoppedOut(tabID) else {
             uiView.subviews.forEach { $0.removeFromSuperview() }
             return
         }

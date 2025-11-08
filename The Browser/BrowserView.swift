@@ -18,19 +18,32 @@ struct BrowserView: View {
         _viewModel = StateObject(wrappedValue: BrowserViewModel(settings: settings))
     }
 
+    @ViewBuilder
+    private var contentView: some View {
+        let tabIDs = viewModel.displayedTabIDs
+
+        if tabIDs.isEmpty {
+            if let selected = viewModel.selectedTabID, viewModel.isTabPoppedOut(selected) {
+                PoppedOutPlaceholder(tabTitle: viewModel.tabState(for: selected)?.displayTitle ?? "Tab")
+            } else if let selected = viewModel.selectedTabID {
+                BrowserTabContentView(viewModel: viewModel, tabID: selected)
+            } else {
+                DefaultHomeView()
+            }
+        } else if tabIDs.count == 1, let tabID = tabIDs.first {
+            BrowserTabContentView(viewModel: viewModel, tabID: tabID)
+        } else {
+            BrowserSplitStack(viewModel: viewModel, tabIDs: tabIDs, selectedTabID: viewModel.selectedTabID)
+        }
+    }
+
     var body: some View {
         ZStack(alignment: .leading) {
-            Group {
-                if viewModel.isCurrentTabDisplayingWebContent {
-                    BrowserWebView(viewModel: viewModel)
-                } else {
-                    DefaultHomeView()
-                }
-            }
-            .background(Color.browserBackground)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.leading, isWebContentFullscreen ? 0 : sidebarWidth)
-            .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
+            contentView
+                .background(Color.browserBackground)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.leading, isWebContentFullscreen ? 0 : sidebarWidth)
+                .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
 
             if !isWebContentFullscreen {
                 BrowserSidebar(
@@ -320,9 +333,19 @@ private struct BrowserSidebar: View {
                         TabRow(
                             tab: tab,
                             isSelected: tab.id == viewModel.selectedTabID,
+                            isInSplitView: viewModel.isTabInSplitView(tab.id),
+                            isPoppedOut: viewModel.isTabPoppedOut(tab.id),
                             appearance: appearance,
                             selectAction: { viewModel.selectTab(tab.id) },
-                            closeAction: { viewModel.closeTab(tab.id) }
+                            closeAction: { viewModel.closeTab(tab.id) },
+                            toggleSplitAction: { viewModel.toggleTabInSplitView(tab.id) },
+#if os(macOS)
+                            popOutAction: { viewModel.popOutTab(tab.id) },
+                            reattachAction: { viewModel.reattachTab(tab.id) }
+#else
+                            popOutAction: nil,
+                            reattachAction: nil
+#endif
                         )
                     }
                 }
@@ -433,9 +456,14 @@ private struct WindowControlButton: View {
 private struct TabRow: View {
     let tab: BrowserViewModel.TabState
     let isSelected: Bool
+    let isInSplitView: Bool
+    let isPoppedOut: Bool
     let appearance: BrowserSidebarAppearance
     let selectAction: () -> Void
     let closeAction: () -> Void
+    let toggleSplitAction: () -> Void
+    let popOutAction: (() -> Void)?
+    let reattachAction: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -455,6 +483,16 @@ private struct TabRow: View {
             }
 
             Spacer()
+
+            if isPoppedOut {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(appearance.secondary)
+            } else if isInSplitView {
+                Image(systemName: "square.split.2x1.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(appearance.secondary)
+            }
 
             if tab.isLoading {
                 ProgressView()
@@ -482,6 +520,115 @@ private struct TabRow: View {
         .opacity(isSelected ? 1 : 0.9)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture(perform: selectAction)
+        .contextMenu {
+            Button(isInSplitView ? "Remove from Split View" : "Add to Split View", action: toggleSplitAction)
+#if os(macOS)
+            if isPoppedOut, let reattachAction {
+                Button("Reattach Tab", action: reattachAction)
+            } else if let popOutAction {
+                Button("Pop Out Tab", action: popOutAction)
+            }
+#endif
+        }
+    }
+}
+
+private struct BrowserSplitStack: View {
+    @ObservedObject var viewModel: BrowserViewModel
+    let tabIDs: [UUID]
+    let selectedTabID: UUID?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(tabIDs.enumerated()), id: \.element) { index, tabID in
+                BrowserTabPane(viewModel: viewModel, tabID: tabID, isSelected: tabID == selectedTabID)
+                if index < tabIDs.count - 1 {
+                    Divider()
+                        .background(Color.black.opacity(0.12))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct BrowserTabPane: View {
+    @ObservedObject var viewModel: BrowserViewModel
+    let tabID: UUID
+    let isSelected: Bool
+
+    var body: some View {
+        BrowserTabContentView(viewModel: viewModel, tabID: tabID)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(
+                RoundedRectangle(cornerRadius: 0)
+                    .stroke(isSelected ? Color.browserAccent : Color.clear, lineWidth: 2)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                viewModel.selectTab(tabID)
+            }
+            .contextMenu {
+                Button("Remove from Split View") {
+                    viewModel.removeTabFromSplitView(tabID)
+                }
+#if os(macOS)
+                if viewModel.isTabPoppedOut(tabID) {
+                    Button("Reattach Tab") {
+                        viewModel.reattachTab(tabID)
+                    }
+                } else {
+                    Button("Pop Out Tab") {
+                        viewModel.popOutTab(tabID)
+                    }
+                }
+#endif
+            }
+    }
+}
+
+struct BrowserTabContentView: View {
+    @ObservedObject var viewModel: BrowserViewModel
+    let tabID: UUID
+
+    var body: some View {
+        Group {
+            if let tab = viewModel.tabState(for: tabID) {
+                switch tab.kind {
+                case .nativeHome:
+                    DefaultHomeView()
+                case .web:
+                    BrowserWebView(viewModel: viewModel, tabID: tabID)
+                }
+            } else {
+                DefaultHomeView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.browserBackground)
+    }
+}
+
+private struct PoppedOutPlaceholder: View {
+    let tabTitle: String
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "arrow.up.right.square")
+                .font(.system(size: 44, weight: .semibold))
+                .foregroundStyle(Color.browserAccent)
+
+            Text("\(tabTitle) is open in a separate window")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+
+            Text("Use the tab menu to reattach it to this workspace.")
+                .font(.subheadline)
+                .foregroundStyle(Color.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
     }
 }
 
