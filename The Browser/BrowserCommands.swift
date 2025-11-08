@@ -17,6 +17,7 @@ struct BrowserCommandContext {
     let zoomOut: () -> Void
     let resetZoom: () -> Void
     let toggleContentFullscreen: () -> Void
+    let openSettings: () -> Void
     let canSelectNextTab: Bool
     let canSelectPreviousTab: Bool
     let canReopenLastClosedTab: Bool
@@ -49,6 +50,14 @@ struct BrowserCommands: Commands {
                 actions?.openNewTab()
             }
             .keyboardShortcut("t", modifiers: .command)
+            .disabled(actions == nil)
+        }
+
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") {
+                actions?.openSettings()
+            }
+            .keyboardShortcut(",", modifiers: .command)
             .disabled(actions == nil)
         }
 

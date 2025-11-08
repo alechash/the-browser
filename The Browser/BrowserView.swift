@@ -109,6 +109,14 @@ struct BrowserView: View {
                     isWebContentFullscreen.toggle()
                 }
             },
+            openSettings: {
+                if isWebContentFullscreen {
+                    withAnimation {
+                        isWebContentFullscreen = false
+                    }
+                }
+                isShowingSettings = true
+            },
             canSelectNextTab: viewModel.hasMultipleTabs,
             canSelectPreviousTab: viewModel.hasMultipleTabs,
             canReopenLastClosedTab: viewModel.canReopenLastClosedTab,
