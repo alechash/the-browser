@@ -937,7 +937,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        configuration.allowsPictureInPictureMediaPlayback = true
+        // configuration.allowsPictureInPictureMediaPlayback = true
 #if os(macOS)
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
         configuration.preferences.setValue(true, forKey: "fullScreenEnabled")

@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 #if os(macOS)
 import AppKit
 #endif
@@ -62,9 +63,7 @@ struct BrowserView: View {
                     isAddressFocused: $isAddressFocused,
                     isShowingSettings: $isShowingSettings,
                     enterFullscreen: { withAnimation { isWebContentFullscreen = true } }
-#if os(macOS)
                     , addressFieldController: addressFieldController
-#endif
                 )
                 .frame(width: sidebarWidth)
                 .transition(.move(edge: .leading).combined(with: .opacity))
