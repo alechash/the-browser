@@ -9,6 +9,7 @@ struct BrowserView: View {
     @FocusState private var isAddressFocused: Bool
     @State private var isShowingSettings = false
     @State private var isWebContentFullscreen = false
+    @State private var addressFocusTrigger = 0
     private let sidebarWidth: CGFloat = 288
 
     init() {
@@ -57,6 +58,7 @@ struct BrowserView: View {
                     viewModel: viewModel,
                     appearance: viewModel.sidebarAppearance,
                     isAddressFocused: $isAddressFocused,
+                    addressFocusTrigger: addressFocusTrigger,
                     isShowingSettings: $isShowingSettings,
                     enterFullscreen: { withAnimation { isWebContentFullscreen = true } }
                 )
@@ -121,7 +123,10 @@ struct BrowserView: View {
                         isWebContentFullscreen = false
                     }
                 }
-                isAddressFocused = true
+                addressFocusTrigger &+= 1
+                DispatchQueue.main.async {
+                    isAddressFocused = true
+                }
             },
             findOnPage: viewModel.findInPage,
             zoomIn: viewModel.zoomIn,
@@ -293,6 +298,7 @@ private struct BrowserSidebar: View {
     @ObservedObject var viewModel: BrowserViewModel
     let appearance: BrowserSidebarAppearance
     var isAddressFocused: FocusState<Bool>.Binding
+    var addressFocusTrigger: Int
     @Binding var isShowingSettings: Bool
     let enterFullscreen: () -> Void
     @State private var addressFieldWidth: CGFloat = 0
@@ -535,7 +541,8 @@ private struct BrowserSidebar: View {
             onArrowDown: { viewModel.highlightNextAddressSuggestion() },
             onArrowUp: { viewModel.highlightPreviousAddressSuggestion() },
             onCancel: viewModel.dismissAddressSuggestions,
-            onFocusChange: handleAddressFocusChange
+            onFocusChange: handleAddressFocusChange,
+            focusTrigger: addressFocusTrigger
         )
 #endif
 
@@ -1042,6 +1049,7 @@ private struct MacAddressTextField: NSViewRepresentable {
     var onArrowUp: () -> Bool
     var onCancel: () -> Void
     var onFocusChange: (Bool) -> Void
+    var focusTrigger: Int
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -1070,10 +1078,24 @@ private struct MacAddressTextField: NSViewRepresentable {
         context.coordinator.parent = self
 
         let isFirstResponder = nsView.window?.firstResponder === nsView.currentEditor()
+        var shouldSelectAll = false
+        if context.coordinator.lastFocusTrigger != focusTrigger {
+            shouldSelectAll = true
+            context.coordinator.lastFocusTrigger = focusTrigger
+        }
+
         if isFocused.wrappedValue {
             context.coordinator.pendingResign = false
-            if !isFirstResponder {
-                nsView.window?.makeFirstResponder(nsView)
+            if !isFirstResponder || shouldSelectAll {
+                let selectAll = shouldSelectAll
+                DispatchQueue.main.async {
+                    if nsView.window?.firstResponder !== nsView.currentEditor() {
+                        nsView.window?.makeFirstResponder(nsView)
+                    }
+                    if selectAll {
+                        nsView.currentEditor()?.selectAll(nil)
+                    }
+                }
             }
         } else {
             if context.coordinator.lastFocusValue {
@@ -1093,9 +1115,11 @@ private struct MacAddressTextField: NSViewRepresentable {
         var parent: MacAddressTextField
         var lastFocusValue = false
         var pendingResign = false
+        var lastFocusTrigger: Int
 
         init(parent: MacAddressTextField) {
             self.parent = parent
+            self.lastFocusTrigger = parent.focusTrigger
         }
 
         func controlTextDidBeginEditing(_ obj: Notification) {
