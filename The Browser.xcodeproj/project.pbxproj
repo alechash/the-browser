@@ -6,8 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		6D720C1F2EC06369003DACCD /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 6D720C1E2EC06369003DACCD /* README.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		6D720AF42EBFC60A003DACCD /* The Browser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "The Browser.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		6D720C1E2EC06369003DACCD /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +39,7 @@
 			children = (
 				6D720AF62EBFC60A003DACCD /* The Browser */,
 				6D720AF52EBFC60A003DACCD /* Products */,
+				6D720C1E2EC06369003DACCD /* README.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -109,6 +115,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6D720C1F2EC06369003DACCD /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
