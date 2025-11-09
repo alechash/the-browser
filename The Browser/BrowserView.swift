@@ -288,6 +288,11 @@ private struct BrowserSidebar: View {
 
             tabList
 
+            if !viewModel.downloads.isEmpty {
+                divider
+                downloadsSection
+            }
+
             Spacer()
 
             HStack(spacing: 12) {
@@ -463,6 +468,28 @@ private struct BrowserSidebar: View {
             .fill(appearance.primary.opacity(0.12))
             .frame(height: 1)
             .padding(.vertical, 4)
+    }
+
+    private var downloadsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Downloads")
+                    .font(.caption)
+                    .foregroundStyle(appearance.secondary)
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(viewModel.downloads) { download in
+                    DownloadRow(
+                        download: download,
+                        appearance: appearance,
+                        revealAction: { viewModel.revealDownload(download.id) },
+                        dismissAction: { viewModel.removeDownload(download.id) }
+                    )
+                }
+            }
+        }
     }
 
     private var tabList: some View {
@@ -739,6 +766,89 @@ private struct TabRow: View {
             return isInSplitView ? "square.split.2x1.fill" : "square.split.2x1"
         case .vertical:
             return isInSplitView ? "square.split.1x2.fill" : "square.split.1x2"
+        }
+    }
+}
+
+private struct DownloadRow: View {
+    let download: BrowserViewModel.DownloadItem
+    let appearance: BrowserSidebarAppearance
+    let revealAction: () -> Void
+    let dismissAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(download.filename)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(appearance.primary)
+
+                    statusView
+                }
+
+                Spacer(minLength: 0)
+
+                VStack(spacing: 8) {
+                    if case .finished = download.state {
+                        Button(action: revealAction) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(width: 28, height: 28)
+                                .foregroundStyle(appearance.primary)
+                        }
+                        .buttonStyle(.plain)
+                        .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 14, includeShadow: false)
+                    }
+
+                    Button(action: dismissAction) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(appearance.primary.opacity(0.85))
+                    }
+                    .buttonStyle(.plain)
+                    .liquidGlassBackground(tint: appearance.controlTint.opacity(0.9), cornerRadius: 12, includeShadow: false)
+                }
+            }
+        }
+        .padding(14)
+        .liquidGlassBackground(tint: appearance.controlTint.opacity(0.55), cornerRadius: 16, includeShadow: false)
+    }
+
+    @ViewBuilder
+    private var statusView: some View {
+        switch download.state {
+        case .preparing:
+            Text("Preparing…")
+                .font(.caption)
+                .foregroundStyle(appearance.secondary)
+        case .downloading(let progress):
+            VStack(alignment: .leading, spacing: 6) {
+                if let progress {
+                    ProgressView(value: progress, total: 1)
+                        .progressViewStyle(.linear)
+                        .tint(Color.browserAccent)
+                    Text("\(Int(progress * 100))% complete")
+                        .font(.caption2)
+                        .foregroundStyle(appearance.secondary)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .tint(Color.browserAccent)
+                    Text("Downloading…")
+                        .font(.caption2)
+                        .foregroundStyle(appearance.secondary)
+                }
+            }
+        case .finished(let url):
+            Text("Saved to \(url.deletingLastPathComponent().lastPathComponent)")
+                .font(.caption2)
+                .foregroundStyle(appearance.secondary)
+        case .failed(let message):
+            Text(message)
+                .font(.caption2)
+                .foregroundStyle(Color.red.opacity(0.8))
         }
     }
 }

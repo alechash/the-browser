@@ -4,6 +4,9 @@ import Combine
 #if os(macOS)
 import AppKit
 #endif
+#if os(iOS)
+import UIKit
+#endif
 
 @MainActor
 final class BrowserViewModel: NSObject, ObservableObject {
@@ -22,6 +25,20 @@ final class BrowserViewModel: NSObject, ObservableObject {
         var progress: Double
         var currentURL: URL?
         var kind: Kind
+    }
+
+    struct DownloadItem: Identifiable, Equatable {
+        enum State: Equatable {
+            case preparing
+            case downloading(progress: Double?)
+            case finished(URL)
+            case failed(String)
+        }
+
+        let id: UUID
+        var filename: String
+        var state: State
+        var sourceURL: URL?
     }
 
     enum SplitOrientation: Equatable {
@@ -72,6 +89,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published private(set) var poppedOutTabIDs: Set<UUID>
 #endif
     @Published private var splitViewFractions: [UUID: CGFloat]
+    @Published private(set) var downloads: [DownloadItem]
 
     var shouldShowProgress: Bool {
         guard let tab = currentTab, tab.kind == .web else { return false }
@@ -138,6 +156,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private var tabSidebarAppearances: [UUID: BrowserSidebarAppearance]
     private var popOutControllers: [UUID: PopOutWindowController]
 #endif
+    private var downloadIDs: [ObjectIdentifier: UUID]
+    private var downloadDestinations: [UUID: URL]
 
     init(settings: BrowserSettings, userDefaults: UserDefaults = .standard) {
         self.settings = settings
@@ -157,6 +177,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
 #endif
         self.splitViewOrientation = .horizontal
         self.splitViewFractions = [:]
+        self.downloads = []
+        self.downloadIDs = [:]
+        self.downloadDestinations = [:]
         super.init()
         restorePreviousSessionIfNeeded()
     }
@@ -190,6 +213,26 @@ final class BrowserViewModel: NSObject, ObservableObject {
         hasLoadedInitialPage = true
         if tabs.isEmpty {
             openNewTab(with: homeURL)
+        }
+    }
+
+    func revealDownload(_ id: UUID) {
+        guard let item = downloads.first(where: { $0.id == id }) else { return }
+        guard case .finished(let url) = item.state else { return }
+#if os(macOS)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+#elseif os(iOS)
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+#endif
+    }
+
+    func removeDownload(_ id: UUID) {
+        if let index = downloads.firstIndex(where: { $0.id == id }) {
+            downloads.remove(at: index)
+        }
+        downloadDestinations.removeValue(forKey: id)
+        if let entry = downloadIDs.first(where: { $0.value == id }) {
+            downloadIDs.removeValue(forKey: entry.key)
         }
     }
 
@@ -941,6 +984,86 @@ final class BrowserViewModel: NSObject, ObservableObject {
         webViewToTabID[ObjectIdentifier(webView)]
     }
 
+    private func downloadID(for download: WKDownload) -> UUID? {
+        downloadIDs[ObjectIdentifier(download)]
+    }
+
+    private func registerDownload(_ download: WKDownload, suggestedFilename: String?, sourceURL: URL?) {
+        let identifier = ObjectIdentifier(download)
+        if let existingID = downloadIDs[identifier] {
+            if let filename = suggestedFilename {
+                let sanitized = sanitizeFilename(filename)
+                updateDownload(id: existingID) { item in
+                    item.filename = sanitized
+                }
+            }
+            if let sourceURL {
+                updateDownload(id: existingID) { item in
+                    item.sourceURL = sourceURL
+                }
+            }
+            return
+        }
+
+        let id = UUID()
+        download.delegate = self
+        downloadIDs[identifier] = id
+        let filename = sanitizeFilename(suggestedFilename ?? sourceURL?.lastPathComponent ?? "Download")
+        let item = DownloadItem(id: id, filename: filename, state: .preparing, sourceURL: sourceURL)
+        downloads.append(item)
+    }
+
+    private func updateDownload(id: UUID, mutate: (inout DownloadItem) -> Void) {
+        guard let index = downloads.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&downloads[index])
+    }
+
+    private func finalizeDownload(_ download: WKDownload) {
+        let identifier = ObjectIdentifier(download)
+        if let id = downloadIDs.removeValue(forKey: identifier) {
+            downloadDestinations.removeValue(forKey: id)
+        }
+    }
+
+    private func downloadsDirectory() -> URL {
+#if os(macOS)
+        let searchDirectory: FileManager.SearchPathDirectory = .downloadsDirectory
+#else
+        let searchDirectory: FileManager.SearchPathDirectory = .documentDirectory
+#endif
+        let directory = FileManager.default.urls(for: searchDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
+        return directory
+    }
+
+    private func uniqueDestination(for filename: String, in directory: URL) -> URL {
+        let baseName = (filename as NSString).deletingPathExtension
+        let fileExtension = (filename as NSString).pathExtension
+        var attempt = 0
+        var candidate: URL
+        repeat {
+            let name: String
+            if attempt == 0 {
+                name = filename
+            } else if fileExtension.isEmpty {
+                name = "\(baseName) (\(attempt))"
+            } else {
+                name = "\(baseName) (\(attempt)).\(fileExtension)"
+            }
+            candidate = directory.appendingPathComponent(name)
+            attempt += 1
+        } while FileManager.default.fileExists(atPath: candidate.path)
+        return candidate
+    }
+
+    private func sanitizeFilename(_ filename: String) -> String {
+        let invalidCharacters = CharacterSet(charactersIn: "\\/:*?\"<>|")
+        var cleaned = filename.components(separatedBy: invalidCharacters).joined(separator: "_")
+        if cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            cleaned = "Download"
+        }
+        return cleaned
+    }
+
     private func updateProgress(for webView: WKWebView, value: Double) {
         guard let tabID = tabID(for: webView),
               let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
@@ -1145,6 +1268,51 @@ extension BrowserViewModel {
 }
 
 extension BrowserViewModel: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if #available(macOS 11.3, iOS 14.5, *) {
+            if navigationAction.shouldPerformDownload {
+                decisionHandler(.download)
+                return
+            }
+        }
+
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if !navigationResponse.canShowMIMEType {
+            decisionHandler(.download)
+            return
+        }
+
+        if let httpResponse = navigationResponse.response as? HTTPURLResponse,
+           let disposition = httpResponse.value(forHTTPHeaderField: "Content-Disposition")?.lowercased(),
+           disposition.contains("attachment") {
+            decisionHandler(.download)
+            return
+        }
+
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        registerDownload(download, suggestedFilename: nil, sourceURL: navigationAction.request.url)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        registerDownload(download, suggestedFilename: navigationResponse.response.suggestedFilename, sourceURL: navigationResponse.response.url)
+    }
+
+    @available(macOS 11.3, iOS 14.5, *)
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, willPerformDownload download: WKDownload) {
+        registerDownload(download, suggestedFilename: navigationAction.request.url?.lastPathComponent, sourceURL: navigationAction.request.url)
+    }
+
+    @available(macOS 11.3, iOS 14.5, *)
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, willPerformDownload download: WKDownload) {
+        registerDownload(download, suggestedFilename: navigationResponse.response.suggestedFilename, sourceURL: navigationResponse.response.url)
+    }
+
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         updateNavigationState(for: webView, isLoading: true)
     }
@@ -1195,6 +1363,55 @@ extension BrowserViewModel: WKUIDelegate {
 
         openNewTab(with: url)
         return nil
+    }
+}
+
+extension BrowserViewModel: WKDownloadDelegate {
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        guard let id = downloadID(for: download) else {
+            completionHandler(nil)
+            return
+        }
+
+        let filename = sanitizeFilename(suggestedFilename)
+        let directory = downloadsDirectory()
+        let destination = uniqueDestination(for: filename, in: directory)
+        downloadDestinations[id] = destination
+        updateDownload(id: id) { item in
+            item.filename = destination.lastPathComponent
+            item.state = .downloading(progress: 0)
+        }
+        completionHandler(destination)
+    }
+
+    func download(_ download: WKDownload, didReceive response: URLResponse, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        guard let id = downloadID(for: download) else { return }
+        let progress: Double?
+        if totalBytesExpectedToWrite > 0 {
+            progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        } else {
+            progress = nil
+        }
+        updateDownload(id: id) { item in
+            item.state = .downloading(progress: progress)
+        }
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        guard let id = downloadID(for: download) else { return }
+        let destination = downloadDestinations[id] ?? downloadsDirectory().appendingPathComponent(downloads.first(where: { $0.id == id })?.filename ?? "Download")
+        updateDownload(id: id) { item in
+            item.state = .finished(destination)
+        }
+        finalizeDownload(download)
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        guard let id = downloadID(for: download) else { return }
+        updateDownload(id: id) { item in
+            item.state = .failed(error.localizedDescription)
+        }
+        finalizeDownload(download)
     }
 }
 
