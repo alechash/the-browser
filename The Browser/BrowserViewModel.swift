@@ -1436,23 +1436,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        if let highlightedID = highlightedAddressSuggestionID,
-           let highlighted = addressSuggestions.first(where: { $0.id == highlightedID }) {
-            selectAddressSuggestion(highlighted)
-            return true
+        guard let highlightedID = highlightedAddressSuggestionID,
+              let highlighted = addressSuggestions.first(where: { $0.id == highlightedID }) else {
+            return false
         }
 
-        guard BrowserViewModel.url(from: trimmed) != nil else { return false }
-        guard let topSuggestion = addressSuggestions.first else { return false }
-
-        let loweredInput = trimmed.lowercased()
-        let matchesTopSuggestion =
-            topSuggestion.displayURL.lowercased().hasPrefix(loweredInput) ||
-            topSuggestion.displayTitle.lowercased().hasPrefix(loweredInput)
-
-        guard matchesTopSuggestion else { return false }
-
-        selectAddressSuggestion(topSuggestion)
+        selectAddressSuggestion(highlighted)
         return true
     }
 
