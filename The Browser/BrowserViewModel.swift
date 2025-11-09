@@ -1268,11 +1268,48 @@ extension BrowserViewModel {
 }
 
 extension BrowserViewModel: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if #available(macOS 11.3, iOS 14.5, *) {
+            if navigationAction.shouldPerformDownload {
+                decisionHandler(.download)
+                return
+            }
+        }
+
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if !navigationResponse.canShowMIMEType {
+            decisionHandler(.download)
+            return
+        }
+
+        if let httpResponse = navigationResponse.response as? HTTPURLResponse,
+           let disposition = httpResponse.value(forHTTPHeaderField: "Content-Disposition")?.lowercased(),
+           disposition.contains("attachment") {
+            decisionHandler(.download)
+            return
+        }
+
+        decisionHandler(.allow)
+    }
+
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
         registerDownload(download, suggestedFilename: nil, sourceURL: navigationAction.request.url)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        registerDownload(download, suggestedFilename: navigationResponse.response.suggestedFilename, sourceURL: navigationResponse.response.url)
+    }
+
+    @available(macOS 11.3, iOS 14.5, *)
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, willPerformDownload download: WKDownload) {
+        registerDownload(download, suggestedFilename: navigationAction.request.url?.lastPathComponent, sourceURL: navigationAction.request.url)
+    }
+
+    @available(macOS 11.3, iOS 14.5, *)
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, willPerformDownload download: WKDownload) {
         registerDownload(download, suggestedFilename: navigationResponse.response.suggestedFilename, sourceURL: navigationResponse.response.url)
     }
 
