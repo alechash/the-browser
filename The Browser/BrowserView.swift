@@ -1070,15 +1070,29 @@ private struct MacAddressTextField: NSViewRepresentable {
         context.coordinator.parent = self
 
         let isFirstResponder = nsView.window?.firstResponder === nsView.currentEditor
-        if isFocused.wrappedValue && !isFirstResponder {
-            nsView.window?.makeFirstResponder(nsView)
-        } else if !isFocused.wrappedValue && isFirstResponder {
-            nsView.window?.makeFirstResponder(nil)
+        if isFocused.wrappedValue {
+            context.coordinator.pendingResign = false
+            if !isFirstResponder {
+                nsView.window?.makeFirstResponder(nsView)
+            }
+        } else {
+            if context.coordinator.lastFocusValue {
+                context.coordinator.pendingResign = true
+            }
+
+            if context.coordinator.pendingResign && isFirstResponder {
+                nsView.window?.makeFirstResponder(nil)
+                context.coordinator.pendingResign = false
+            }
         }
+
+        context.coordinator.lastFocusValue = isFocused.wrappedValue
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: MacAddressTextField
+        var lastFocusValue = false
+        var pendingResign = false
 
         init(parent: MacAddressTextField) {
             self.parent = parent
