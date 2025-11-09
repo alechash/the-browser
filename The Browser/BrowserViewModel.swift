@@ -177,6 +177,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private static let sessionStorageKey = "browser.session.state"
     private static let historyStorageKey = "browser.history.entries"
     private static let historyLimit = 500
+#if os(macOS)
+    private static let modernUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+#else
+    private static let modernUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+#endif
     private var hasLoadedInitialPage = false
     private var isRestoringSession = false
     private var webViews: [UUID: WKWebView]
@@ -568,12 +573,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
     func submitAddress() {
         guard let id = selectedTabID,
               let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-        if acceptHighlightedAddressSuggestion() {
-            return
-        }
 
         let input = tabs[index].addressBarText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
+
+        if acceptAddressSuggestion(matching: input) {
+            return
+        }
 
         let targetURL: URL
         if let url = BrowserViewModel.url(from: input) {
@@ -680,11 +686,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
         load(url: entry.url)
     }
 
-    func highlightNextAddressSuggestion() {
+    @discardableResult
+    func highlightNextAddressSuggestion() -> Bool {
         moveHighlightedAddressSuggestion(by: 1)
     }
 
-    func highlightPreviousAddressSuggestion() {
+    @discardableResult
+    func highlightPreviousAddressSuggestion() -> Bool {
         moveHighlightedAddressSuggestion(by: -1)
     }
 
@@ -944,6 +952,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webViewToTabID[ObjectIdentifier(webView)] = tabID
+#if os(macOS) || os(iOS)
+        webView.customUserAgent = Self.modernUserAgent
+#endif
 
         progressObservations[tabID]?.invalidate()
         progressObservations[tabID] = webView.observe(\.estimatedProgress, options: .new) { [weak self] webView, _ in
@@ -1423,19 +1434,24 @@ final class BrowserViewModel: NSObject, ObservableObject {
         highlightedAddressSuggestionID = nil
     }
 
-    @discardableResult
-    private func acceptHighlightedAddressSuggestion() -> Bool {
-        guard let highlightedID = highlightedAddressSuggestionID,
-              let suggestion = addressSuggestions.first(where: { $0.id == highlightedID }) else { return false }
+    private func acceptAddressSuggestion(matching input: String) -> Bool {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
 
-        selectAddressSuggestion(suggestion)
+        guard let highlightedID = highlightedAddressSuggestionID,
+              let highlighted = addressSuggestions.first(where: { $0.id == highlightedID }) else {
+            return false
+        }
+
+        selectAddressSuggestion(highlighted)
         return true
     }
 
-    private func moveHighlightedAddressSuggestion(by offset: Int) {
+    @discardableResult
+    private func moveHighlightedAddressSuggestion(by offset: Int) -> Bool {
         guard !addressSuggestions.isEmpty else {
             highlightedAddressSuggestionID = nil
-            return
+            return false
         }
 
         let currentIndex = addressSuggestions.firstIndex { $0.id == highlightedAddressSuggestionID }
@@ -1448,6 +1464,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
 
         highlightedAddressSuggestionID = addressSuggestions[newIndex].id
+        return true
     }
 
     private func recordHistoryVisit(url: URL, title: String?) {
