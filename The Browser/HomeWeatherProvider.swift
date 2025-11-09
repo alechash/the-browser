@@ -20,6 +20,14 @@ final class HomeWeatherProvider: NSObject, ObservableObject {
     private let weatherService = WeatherService.shared
     private let locationManager = CLLocationManager()
 
+    private var authorizationStatus: CLAuthorizationStatus {
+        if #available(iOS 14.0, macOS 11.0, *) {
+            return locationManager.authorizationStatus
+        } else {
+            return CLLocationManager.authorizationStatus()
+        }
+    }
+
     override init() {
         super.init()
         locationManager.delegate = self
@@ -27,7 +35,14 @@ final class HomeWeatherProvider: NSObject, ObservableObject {
     }
 
     func refresh() {
-        switch locationManager.authorizationStatus {
+        guard CLLocationManager.locationServicesEnabled() else {
+            statusMessage = "Turn on Location Services to see the local weather."
+            summary = nil
+            isLoading = false
+            return
+        }
+
+        switch authorizationStatus {
         case .notDetermined:
             statusMessage = nil
             locationManager.requestWhenInUseAuthorization()
@@ -48,6 +63,9 @@ final class HomeWeatherProvider: NSObject, ObservableObject {
             fetchWeather(for: location)
         } else {
             isLoading = true
+#if os(macOS)
+            locationManager.startUpdatingLocation()
+#endif
             locationManager.requestLocation()
         }
     }
@@ -139,10 +157,19 @@ extension HomeWeatherProvider: CLLocationManagerDelegate {
         }
     }
 
+    nonisolated func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
+        Task { @MainActor in
+            self.refresh()
+        }
+    }
+
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         Task { @MainActor in
             self.fetchWeather(for: location)
+#if os(macOS)
+            self.locationManager.stopUpdatingLocation()
+#endif
         }
     }
 
@@ -150,6 +177,9 @@ extension HomeWeatherProvider: CLLocationManagerDelegate {
         Task { @MainActor in
             self.statusMessage = "Unable to determine your location."
             self.isLoading = false
+#if os(macOS)
+            self.locationManager.stopUpdatingLocation()
+#endif
         }
     }
 }
