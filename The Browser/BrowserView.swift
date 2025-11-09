@@ -800,6 +800,9 @@ private struct BrowserSidebar: View {
                             canPopOut: viewModel.canPopOutTab(tab.id),
                             togglePopOutAction: { viewModel.togglePopOut(for: tab.id) }
                         )
+                        .contextMenu {
+                            spacesContextMenu(for: tab)
+                        }
 #else
                         TabRow(
                             tab: tab,
@@ -813,10 +816,34 @@ private struct BrowserSidebar: View {
                             toggleSplitAction: { viewModel.toggleSplitView(for: tab.id) },
                             splitOrientation: viewModel.splitViewOrientation
                         )
+                        .contextMenu {
+                            spacesContextMenu(for: tab)
+                        }
 #endif
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func spacesContextMenu(for tab: BrowserViewModel.TabState) -> some View {
+        if tab.kind != .web {
+            Label("Only web tabs can be saved", systemImage: "exclamationmark.triangle")
+                .disabled(true)
+        } else if viewModel.spaces.isEmpty {
+            Label("Create a space to save tabs", systemImage: "folder.badge.plus")
+                .disabled(true)
+        } else {
+            Section("Save Tab to Space") {
+                ForEach(viewModel.spaces) { space in
+                    Button {
+                        viewModel.saveTab(tab.id, to: space.id)
+                    } label: {
+                        Label(space.name, systemImage: "folder")
+                    }
+                }
             }
         }
     }
@@ -915,6 +942,9 @@ private struct SpaceRow: View {
         if !space.pinnedTabs.isEmpty {
             parts.append("\(space.pinnedTabs.count) pinned tab\(space.pinnedTabs.count == 1 ? "" : "s")")
         }
+        if !space.savedTabs.isEmpty {
+            parts.append("\(space.savedTabs.count) saved tab\(space.savedTabs.count == 1 ? "" : "s")")
+        }
         if !space.notes.isEmpty {
             parts.append("\(space.notes.count) note\(space.notes.count == 1 ? "" : "s")")
         }
@@ -946,28 +976,42 @@ private struct SpaceWorkspaceView: View {
     @State private var imageURL: String = ""
     @State private var imageCaption: String = ""
 
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: 320, maximum: 420), spacing: 24)]
+    }
+
+    private var space: BrowserViewModel.Space? {
+        viewModel.space(with: spaceID)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
                 header
-                pinnedTabsSection
-                notesSection
-                linksSection
-                imagesSection
+                if let space {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
+                        pinnedTabsCard(space)
+                        savedTabsCard(space)
+                        notesCard(space)
+                        linksCard(space)
+                        imagesCard(space)
+                    }
+                } else {
+                    spaceUnavailable
+                }
             }
-            .frame(maxWidth: 760)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 40)
-            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, 40)
+            .padding(.vertical, 48)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Color.browserBackground)
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if let space = viewModel.space(with: spaceID) {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(alignment: .center, spacing: 18) {
+        Group {
+            if let space {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack(alignment: .top, spacing: 20) {
                         iconPicker(for: space)
 
                         VStack(alignment: .leading, spacing: 10) {
@@ -978,20 +1022,51 @@ private struct SpaceWorkspaceView: View {
                                     set: { viewModel.renameSpace(spaceID, to: $0) }
                                 )
                             )
-                            .font(.largeTitle.weight(.semibold))
+                            .font(.system(size: 34, weight: .bold, design: .rounded))
                             .textFieldStyle(.plain)
                             .foregroundStyle(appearance.primary)
 
                             Text("Created \(formatted(date: space.createdAt))")
                                 .font(.caption)
-                                .foregroundStyle(appearance.secondary)
+                                .foregroundStyle(appearance.secondary.opacity(0.8))
+                        }
+
+                        Spacer(minLength: 0)
+
+                        VStack(alignment: .trailing, spacing: 12) {
+                            Button {
+                                viewModel.pinCurrentTab(in: spaceID)
+                            } label: {
+                                Label("Pin Current Tab", systemImage: "pin")
+                                    .labelStyle(.titleAndIcon)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!viewModel.currentTabExists)
+
+                            Button {
+                                viewModel.saveCurrentTab(to: spaceID)
+                            } label: {
+                                Label("Save Current Tab", systemImage: "bookmark")
+                                    .labelStyle(.titleAndIcon)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!viewModel.currentTabExists)
+
+                            Button(role: .destructive) {
+                                viewModel.deleteSpace(spaceID)
+                            } label: {
+                                Label("Delete Space", systemImage: "trash")
+                            }
+                            .buttonStyle(.bordered)
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    metricRow(for: space)
+
+                    VStack(alignment: .leading, spacing: 10) {
                         Text("Icon (SF Symbol)")
                             .font(.caption)
-                            .foregroundStyle(appearance.secondary)
+                            .foregroundStyle(appearance.secondary.opacity(0.85))
 
                         TextField(
                             "folder",
@@ -1003,23 +1078,355 @@ private struct SpaceWorkspaceView: View {
                         .textFieldStyle(.roundedBorder)
                     }
                 }
+                .padding(28)
+                .background(
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    appearance.controlTint.opacity(0.95),
+                                    appearance.controlTint.opacity(0.65)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .stroke(appearance.primary.opacity(0.15), lineWidth: 1.2)
+                )
+                .shadow(color: appearance.primary.opacity(0.08), radius: 20, x: 0, y: 12)
             } else {
-                Text("Space Unavailable")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(appearance.primary)
-            }
-
-            HStack {
-                Spacer()
-                Button(role: .destructive) {
-                    viewModel.deleteSpace(spaceID)
-                } label: {
-                    Label("Delete Space", systemImage: "trash")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .buttonStyle(.bordered)
+                spaceUnavailable
             }
         }
+    }
+
+    private var spaceUnavailable: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Space Unavailable")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(appearance.primary)
+            Text("This space could not be found. It may have been removed or is still loading.")
+                .font(.callout)
+                .foregroundStyle(appearance.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(32)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(appearance.controlTint.opacity(0.6))
+        )
+    }
+
+    private func pinnedTabsCard(_ space: BrowserViewModel.Space) -> some View {
+        SpaceCard(title: "Pinned Tabs", icon: "pin", appearance: appearance) {
+            if space.pinnedTabs.isEmpty {
+                SpaceEmptyState(
+                    message: "No pinned tabs yet. Pin pages you want quick access to."
+                )
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(space.pinnedTabs) { pinned in
+                        SpaceItemContainer(appearance: appearance) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(pinned.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(appearance.primary)
+                                if let url = pinned.url {
+                                    Text(url.absoluteString)
+                                        .font(.caption2)
+                                        .foregroundStyle(appearance.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+
+                            Spacer(minLength: 12)
+
+                            VStack(spacing: 8) {
+                                Button("Open") {
+                                    viewModel.openPinnedTab(spaceID: spaceID, pinnedID: pinned.id)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(pinned.url == nil)
+
+                                Button(role: .destructive) {
+                                    viewModel.removePinnedTab(in: spaceID, pinnedID: pinned.id)
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            Button {
+                viewModel.pinCurrentTab(in: spaceID)
+            } label: {
+                Label("Pin Current Tab", systemImage: "pin")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(!viewModel.currentTabExists)
+        }
+    }
+
+    private func savedTabsCard(_ space: BrowserViewModel.Space) -> some View {
+        SpaceCard(title: "Saved Tabs", icon: "bookmark", appearance: appearance) {
+            if space.savedTabs.isEmpty {
+                SpaceEmptyState(message: "Capture tabs you want to revisit without keeping them open.")
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(space.savedTabs) { saved in
+                        SpaceItemContainer(appearance: appearance) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(saved.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(appearance.primary)
+                                if let url = saved.url {
+                                    Text(url.absoluteString)
+                                        .font(.caption2)
+                                        .foregroundStyle(appearance.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Text("Saved \(formatted(date: saved.capturedAt))")
+                                    .font(.caption2)
+                                    .foregroundStyle(appearance.secondary.opacity(0.85))
+                            }
+
+                            Spacer(minLength: 12)
+
+                            VStack(spacing: 8) {
+                                Button("Open") {
+                                    viewModel.openSavedTab(spaceID: spaceID, savedID: saved.id)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(saved.url == nil)
+
+                                Button(role: .destructive) {
+                                    viewModel.removeSavedTab(in: spaceID, savedID: saved.id)
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            Button {
+                viewModel.saveCurrentTab(to: spaceID)
+            } label: {
+                Label("Save Current Tab", systemImage: "bookmark")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(!viewModel.currentTabExists)
+        }
+    }
+
+    private func notesCard(_ space: BrowserViewModel.Space) -> some View {
+        SpaceCard(title: "Notes", icon: "highlighter", appearance: appearance) {
+            if space.notes.isEmpty {
+                SpaceEmptyState(message: "Capture sparks, next steps, or quick reminders.")
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(space.notes) { note in
+                        SpaceItemContainer(appearance: appearance) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(note.text)
+                                    .font(.body)
+                                    .foregroundStyle(appearance.primary)
+                                    .multilineTextAlignment(.leading)
+                                Text(formatted(date: note.createdAt))
+                                    .font(.caption2)
+                                    .foregroundStyle(appearance.secondary.opacity(0.85))
+                            }
+
+                            Button(role: .destructive) {
+                                viewModel.removeNote(in: spaceID, noteID: note.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("New Note")
+                    .font(.caption)
+                    .foregroundStyle(appearance.secondary.opacity(0.85))
+
+                TextEditor(text: $noteDraft)
+                    .frame(minHeight: 90)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(appearance.controlTint.opacity(0.75))
+                    )
+
+                Button {
+                    viewModel.addNote(to: spaceID, text: noteDraft)
+                    noteDraft = ""
+                } label: {
+                    Label("Save Note", systemImage: "square.and.arrow.down")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func linksCard(_ space: BrowserViewModel.Space) -> some View {
+        SpaceCard(title: "Links", icon: "link", appearance: appearance) {
+            if space.links.isEmpty {
+                SpaceEmptyState(message: "Save references, reading lists, and resources.")
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(space.links) { link in
+                        SpaceItemContainer(appearance: appearance) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(link.displayTitle)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(appearance.primary)
+                                if let url = link.url {
+                                    Text(url.absoluteString)
+                                        .font(.caption2)
+                                        .foregroundStyle(appearance.secondary)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
+                                }
+                                Text("Saved \(formatted(date: link.createdAt))")
+                                    .font(.caption2)
+                                    .foregroundStyle(appearance.secondary.opacity(0.85))
+                            }
+
+                            Button(role: .destructive) {
+                                viewModel.removeLink(in: spaceID, linkID: link.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("New Link")
+                    .font(.caption)
+                    .foregroundStyle(appearance.secondary.opacity(0.85))
+
+                TextField("Title", text: $linkTitle)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("https://example.com", text: $linkURL)
+                    .textFieldStyle(.roundedBorder)
+
+                Button {
+                    viewModel.addLink(to: spaceID, title: linkTitle, urlString: linkURL)
+                    linkTitle = ""
+                    linkURL = ""
+                } label: {
+                    Label("Save Link", systemImage: "link")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(linkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func imagesCard(_ space: BrowserViewModel.Space) -> some View {
+        SpaceCard(title: "Images", icon: "photo.on.rectangle", appearance: appearance) {
+            if space.images.isEmpty {
+                SpaceEmptyState(message: "Collect inspiration, mood boards, and reference art.")
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 12)], spacing: 12) {
+                    ForEach(space.images) { image in
+                        SpaceImageTile(
+                            image: image,
+                            appearance: appearance,
+                            removeAction: { viewModel.removeImage(in: spaceID, imageID: image.id) }
+                        )
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Add Image")
+                    .font(.caption)
+                    .foregroundStyle(appearance.secondary.opacity(0.85))
+
+                TextField("Image URL", text: $imageURL)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("Caption", text: $imageCaption)
+                    .textFieldStyle(.roundedBorder)
+
+                Button {
+                    viewModel.addImage(to: spaceID, urlString: imageURL, caption: imageCaption)
+                    imageURL = ""
+                    imageCaption = ""
+                } label: {
+                    Label("Save Image", systemImage: "photo.fill.on.rectangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(imageURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func metricRow(for space: BrowserViewModel.Space) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                metricChip(title: "Pinned", value: space.pinnedTabs.count, systemIcon: "pin")
+                metricChip(title: "Saved", value: space.savedTabs.count, systemIcon: "bookmark")
+                metricChip(title: "Notes", value: space.notes.count, systemIcon: "note.text")
+                metricChip(title: "Links", value: space.links.count, systemIcon: "link")
+                metricChip(title: "Images", value: space.images.count, systemIcon: "photo")
+            }
+        }
+    }
+
+    private func metricChip(title: String, value: Int, systemIcon: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemIcon)
+                .font(.system(size: 12, weight: .semibold))
+            Text("\(value)")
+                .font(.subheadline.weight(.semibold))
+            Text(title)
+                .font(.footnote)
+        }
+        .foregroundStyle(appearance.primary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(appearance.controlTint.opacity(0.85))
+        )
     }
 
     @ViewBuilder
@@ -1035,16 +1442,16 @@ private struct SpaceWorkspaceView: View {
             }
         } label: {
             Image(systemName: iconName)
-                .font(.system(size: 28, weight: .semibold))
-                .frame(width: 64, height: 64)
+                .font(.system(size: 32, weight: .semibold))
+                .frame(width: 72, height: 72)
                 .foregroundStyle(appearance.primary)
                 .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .fill(appearance.controlTint.opacity(0.95))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(appearance.primary.opacity(0.2), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(appearance.primary.opacity(0.18), lineWidth: 1.4)
                 )
         }
         .menuStyle(.borderlessButton)
@@ -1080,281 +1487,187 @@ private struct SpaceWorkspaceView: View {
         return trimmed.isEmpty ? "folder" : trimmed
     }
 
-    private var pinnedTabsSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 12) {
-                if let space = viewModel.space(with: spaceID), !space.pinnedTabs.isEmpty {
-                    ForEach(space.pinnedTabs) { pinned in
-                        HStack(alignment: .top, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(pinned.title)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(appearance.primary)
-                                if let url = pinned.url {
-                                    Text(url.absoluteString)
-                                        .font(.caption2)
-                                        .foregroundStyle(appearance.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                            }
-
-                            Spacer()
-
-                            Button("Open") {
-                                viewModel.openPinnedTab(spaceID: spaceID, pinnedID: pinned.id)
-                            }
-                            .buttonStyle(.borderedProminent)
-
-                            Button(role: .destructive) {
-                                viewModel.removePinnedTab(in: spaceID, pinnedID: pinned.id)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(appearance.controlTint.opacity(0.8))
-                        )
-                    }
-                } else {
-                    Text("No pinned tabs yet. Pin your favorite pages from the sidebar.")
-                        .font(.caption)
-                        .foregroundStyle(appearance.secondary)
-                }
-
-                Button {
-                    viewModel.pinCurrentTab(in: spaceID)
-                } label: {
-                    Label("Pin Current Tab", systemImage: "pin")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .buttonStyle(.bordered)
-            }
-        } header: {
-            Text("Pinned Tabs")
-                .font(.headline)
-                .foregroundStyle(appearance.primary)
-        }
-    }
-
-    private var notesSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 12) {
-                if let space = viewModel.space(with: spaceID), !space.notes.isEmpty {
-                    ForEach(space.notes) { note in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(note.text)
-                                .font(.body)
-                                .foregroundStyle(appearance.primary)
-                            Text(formatted(date: note.createdAt))
-                                .font(.caption2)
-                                .foregroundStyle(appearance.secondary)
-                        }
-                        .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(appearance.controlTint.opacity(0.75))
-                        )
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                viewModel.removeNote(in: spaceID, noteID: note.id)
-                            } label: {
-                                Label("Delete Note", systemImage: "trash")
-                            }
-                        }
-                    }
-                } else {
-                    Text("Capture thoughts, next steps, or sketches for later.")
-                        .font(.caption)
-                        .foregroundStyle(appearance.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("New Note")
-                        .font(.caption)
-                        .foregroundStyle(appearance.secondary)
-
-                    TextEditor(text: $noteDraft)
-                        .frame(minHeight: 80)
-                        .padding(10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(appearance.controlTint.opacity(0.7))
-                        )
-
-                    Button {
-                        viewModel.addNote(to: spaceID, text: noteDraft)
-                        noteDraft = ""
-                    } label: {
-                        Label("Save Note", systemImage: "square.and.arrow.down")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        } header: {
-            Text("Notes")
-                .font(.headline)
-                .foregroundStyle(appearance.primary)
-        }
-    }
-
-    private var linksSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 12) {
-                if let space = viewModel.space(with: spaceID), !space.links.isEmpty {
-                    ForEach(space.links) { link in
-                        HStack(alignment: .top, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(link.displayTitle)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(appearance.primary)
-                                if let url = link.url {
-                                    Text(url.absoluteString)
-                                        .font(.caption2)
-                                        .foregroundStyle(appearance.secondary)
-                                        .lineLimit(2)
-                                        .truncationMode(.middle)
-                                }
-                            }
-                            Spacer()
-                            Button(role: .destructive) {
-                                viewModel.removeLink(in: spaceID, linkID: link.id)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(appearance.controlTint.opacity(0.72))
-                        )
-                    }
-                } else {
-                    Text("Save references, readings, and resources for later exploration.")
-                        .font(.caption)
-                        .foregroundStyle(appearance.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("New Link")
-                        .font(.caption)
-                        .foregroundStyle(appearance.secondary)
-
-                    TextField("Title", text: $linkTitle)
-                        .textFieldStyle(.roundedBorder)
-
-                    TextField("https://example.com", text: $linkURL)
-                        .textFieldStyle(.roundedBorder)
-
-                    Button {
-                        viewModel.addLink(to: spaceID, title: linkTitle, urlString: linkURL)
-                        linkTitle = ""
-                        linkURL = ""
-                    } label: {
-                        Label("Save Link", systemImage: "link")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(linkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        } header: {
-            Text("Links")
-                .font(.headline)
-                .foregroundStyle(appearance.primary)
-        }
-    }
-
-    private var imagesSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 12) {
-                if let space = viewModel.space(with: spaceID), !space.images.isEmpty {
-                    ForEach(space.images) { image in
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: "photo")
-                                .font(.system(size: 18, weight: .semibold))
-                                .frame(width: 32, height: 32)
-                                .foregroundStyle(appearance.primary)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(appearance.controlTint.opacity(0.7))
-                                )
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(image.displayCaption)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(appearance.primary)
-                                if let url = image.url {
-                                    Text(url.absoluteString)
-                                        .font(.caption2)
-                                        .foregroundStyle(appearance.secondary)
-                                        .lineLimit(2)
-                                        .truncationMode(.middle)
-                                }
-                            }
-
-                            Spacer()
-
-                            Button(role: .destructive) {
-                                viewModel.removeImage(in: spaceID, imageID: image.id)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(appearance.controlTint.opacity(0.68))
-                        )
-                    }
-                } else {
-                    Text("Collect mood board visuals, screenshots, or artwork.")
-                        .font(.caption)
-                        .foregroundStyle(appearance.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("New Image")
-                        .font(.caption)
-                        .foregroundStyle(appearance.secondary)
-
-                    TextField("Image URL", text: $imageURL)
-                        .textFieldStyle(.roundedBorder)
-
-                    TextField("Caption", text: $imageCaption)
-                        .textFieldStyle(.roundedBorder)
-
-                    Button {
-                        viewModel.addImage(to: spaceID, urlString: imageURL, caption: imageCaption)
-                        imageURL = ""
-                        imageCaption = ""
-                    } label: {
-                        Label("Save Image", systemImage: "photo.on.rectangle")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(imageURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        } header: {
-            Text("Images")
-                .font(.headline)
-                .foregroundStyle(appearance.primary)
-        }
-    }
-
     private func formatted(date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+}
+
+private struct SpaceCard<Content: View>: View {
+    let title: String
+    let icon: String
+    let appearance: BrowserSidebarAppearance
+    let content: Content
+
+    init(title: String, icon: String, appearance: BrowserSidebarAppearance, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.appearance = appearance
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(appearance.primary)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(appearance.controlTint.opacity(0.95))
+                    )
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(appearance.primary)
+            }
+
+            content
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(appearance.controlTint.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(appearance.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
+private struct SpaceItemContainer<Content: View>: View {
+    let appearance: BrowserSidebarAppearance
+    let content: Content
+
+    init(appearance: BrowserSidebarAppearance, @ViewBuilder content: () -> Content) {
+        self.appearance = appearance
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            content
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(appearance.controlTint.opacity(0.92))
+        )
+    }
+}
+
+private struct SpaceEmptyState: View {
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 16, weight: .semibold))
+            Text(message)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.secondary)
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+}
+
+private struct SpaceImageTile: View {
+    let image: BrowserViewModel.Space.ImageResource
+    let appearance: BrowserSidebarAppearance
+    let removeAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .topTrailing) {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(appearance.controlTint.opacity(0.9))
+                    .overlay(
+                        Group {
+                            if let url = image.url {
+                                AsyncImage(url: url) { phase in
+                                    switch phase {
+                                    case .success(let loaded):
+                                        loaded
+                                            .resizable()
+                                            .scaledToFill()
+                                    case .empty:
+                                        progressView
+                                    case .failure:
+                                        placeholder
+                                    @unknown default:
+                                        placeholder
+                                    }
+                                }
+                                .clipped()
+                            } else {
+                                placeholder
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    )
+                    .frame(height: 140)
+
+                Button(role: .destructive, action: removeAction) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(6)
+                }
+#if os(macOS)
+                .buttonStyle(.borderless)
+#else
+                .buttonStyle(.plain)
+#endif
+                .background(
+                    Capsule()
+                        .fill(Color.black.opacity(0.35))
+                )
+                .foregroundStyle(Color.white)
+                .padding(8)
+            }
+
+            Text(image.displayCaption)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(appearance.primary)
+
+            if let url = image.url {
+                Text(url.absoluteString)
+                    .font(.caption2)
+                    .foregroundStyle(appearance.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var placeholder: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.black.opacity(0.12))
+            Image(systemName: "photo")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.8))
+        }
+    }
+
+    @ViewBuilder
+    private var progressView: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.black.opacity(0.1))
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(Color.white.opacity(0.8))
+        }
     }
 }
 

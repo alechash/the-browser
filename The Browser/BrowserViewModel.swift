@@ -72,6 +72,17 @@ final class BrowserViewModel: NSObject, ObservableObject {
             }
         }
 
+        struct SavedTab: Identifiable, Equatable {
+            let id: UUID
+            var title: String
+            var url: URL?
+            var capturedAt: Date
+
+            var displayURL: String {
+                url?.absoluteString ?? ""
+            }
+        }
+
         struct Note: Identifiable, Equatable {
             let id: UUID
             var text: String
@@ -107,12 +118,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
         var iconName: String
         var createdAt: Date
         var pinnedTabs: [PinnedTab]
+        var savedTabs: [SavedTab]
         var notes: [Note]
         var links: [Link]
         var images: [ImageResource]
 
         var isEmpty: Bool {
-            pinnedTabs.isEmpty && notes.isEmpty && links.isEmpty && images.isEmpty
+            pinnedTabs.isEmpty && savedTabs.isEmpty && notes.isEmpty && links.isEmpty && images.isEmpty
         }
     }
 
@@ -318,6 +330,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
                 iconName: "folder",
                 createdAt: Date(),
                 pinnedTabs: [],
+                savedTabs: [],
                 notes: [
                     Space.Note(id: UUID(), text: "Capture sparks of inspiration and return when you're ready to build.", createdAt: Date())
                 ],
@@ -398,6 +411,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
             iconName: "folder",
             createdAt: Date(),
             pinnedTabs: [],
+            savedTabs: [],
             notes: [],
             links: [],
             images: []
@@ -453,6 +467,31 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
     }
 
+    func saveCurrentTab(to spaceID: UUID) {
+        guard let tabID = selectedTabID else { return }
+        saveTab(tabID, to: spaceID)
+    }
+
+    func saveTab(_ tabID: UUID, to spaceID: UUID) {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        let tab = tabs[tabIndex]
+        guard tab.kind == .web else { return }
+        let saved = Space.SavedTab(
+            id: UUID(),
+            title: tab.displayTitle,
+            url: resolvedURL(for: tabID, tab: tab),
+            capturedAt: Date()
+        )
+
+        updateSpace(spaceID) { space in
+            if !space.savedTabs.contains(where: { existing in
+                existing.title == saved.title && existing.url == saved.url
+            }) {
+                space.savedTabs.insert(saved, at: 0)
+            }
+        }
+    }
+
     func removePinnedTab(in spaceID: UUID, pinnedID: UUID) {
         updateSpace(spaceID) { space in
             if let index = space.pinnedTabs.firstIndex(where: { $0.id == pinnedID }) {
@@ -465,6 +504,22 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard let space = space(with: spaceID),
               let pinned = space.pinnedTabs.first(where: { $0.id == pinnedID }),
               let url = pinned.url
+        else { return }
+        openNewTab(with: url)
+    }
+
+    func removeSavedTab(in spaceID: UUID, savedID: UUID) {
+        updateSpace(spaceID) { space in
+            if let index = space.savedTabs.firstIndex(where: { $0.id == savedID }) {
+                space.savedTabs.remove(at: index)
+            }
+        }
+    }
+
+    func openSavedTab(spaceID: UUID, savedID: UUID) {
+        guard let space = space(with: spaceID),
+              let saved = space.savedTabs.first(where: { $0.id == savedID }),
+              let url = saved.url
         else { return }
         openNewTab(with: url)
     }
@@ -510,15 +565,21 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     func addImage(to spaceID: UUID, urlString: String, caption: String) {
         let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedURL.isEmpty else { return }
-        let image = Space.ImageResource(
+        guard !trimmedURL.isEmpty, let url = URL(string: trimmedURL) else { return }
+        addImage(to: spaceID, url: url, caption: caption)
+    }
+
+    func addImage(to spaceID: UUID, url: URL, caption: String = "") {
+        let resource = Space.ImageResource(
             id: UUID(),
-            url: URL(string: trimmedURL),
+            url: url,
             caption: caption,
             createdAt: Date()
         )
         updateSpace(spaceID) { space in
-            space.images.insert(image, at: 0)
+            if !space.images.contains(where: { $0.url == resource.url }) {
+                space.images.insert(resource, at: 0)
+            }
         }
     }
 
@@ -1211,6 +1272,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     private func configureWebView(_ webView: WKWebView, for tabID: UUID) {
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webViewToTabID[ObjectIdentifier(webView)] = tabID
 #if os(macOS) || os(iOS)
@@ -1843,6 +1905,56 @@ extension BrowserViewModel {
 
         return URL(string: "https://\(input)")
     }
+}
+
+extension BrowserViewModel: WKUIDelegate {
+#if os(macOS)
+    func webView(_ webView: WKWebView, contextMenuItemsForElement elementInfo: WKContextMenuElementInfo, defaultMenuItems: [WKContextMenuItem]) -> [WKContextMenuItem] {
+        guard #available(macOS 12.0, *), let imageURL = elementInfo.imageURL else {
+            return defaultMenuItems
+        }
+
+        guard !spaces.isEmpty else { return defaultMenuItems }
+
+        var items = defaultMenuItems
+        let additions = spaces.map { space in
+            WKContextMenuItem(title: "Save Image to \(space.name)") { [weak self] in
+                self?.addImage(to: space.id, url: imageURL)
+            }
+        }
+
+        if !additions.isEmpty {
+            items.append(WKContextMenuItem.separator())
+            items.append(contentsOf: additions)
+        }
+
+        return items
+    }
+#endif
+
+#if os(iOS)
+    func webView(_ webView: WKWebView, contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo, completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
+        guard let imageURL = elementInfo.imageURL, !spaces.isEmpty else {
+            completionHandler(nil)
+            return
+        }
+
+        completionHandler(UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { suggested in
+            let actions = self.spaces.map { space in
+                UIAction(title: "Save to \(space.name)", image: UIImage(systemName: "folder")) { _ in
+                    self.addImage(to: space.id, url: imageURL)
+                }
+            }
+
+            let spaceMenu = UIMenu(title: "Save Image to Space", options: .displayInline, children: actions)
+            if let suggested {
+                return UIMenu(children: [spaceMenu] + suggested.children)
+            } else {
+                return UIMenu(children: [spaceMenu])
+            }
+        })
+    }
+#endif
 }
 
 extension BrowserViewModel: WKNavigationDelegate {
