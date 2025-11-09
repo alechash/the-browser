@@ -587,6 +587,9 @@ private struct BrowserSidebar: View {
                 Button {
                     viewModel.selectAddressSuggestion(suggestion)
                     isAddressFocused.wrappedValue = false
+#if os(macOS)
+                    addressFieldController.blur()
+#endif
                 } label: {
                     suggestionRow(
                         for: suggestion,
@@ -1086,8 +1089,6 @@ private struct MacAddressTextField: NSViewRepresentable {
 
         if isFocused.wrappedValue {
             controller.focusIfNeeded()
-        } else {
-            controller.blur()
         }
     }
 
