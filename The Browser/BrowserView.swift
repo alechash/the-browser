@@ -1069,7 +1069,7 @@ private struct MacAddressTextField: NSViewRepresentable {
 
         context.coordinator.parent = self
 
-        let isFirstResponder = nsView.window?.firstResponder === nsView.currentEditor
+        let isFirstResponder = nsView.window?.firstResponder === nsView.currentEditor()
         if isFocused.wrappedValue {
             context.coordinator.pendingResign = false
             if !isFirstResponder {
