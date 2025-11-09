@@ -60,6 +60,61 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
     }
 
+    struct Space: Identifiable, Equatable {
+        struct PinnedTab: Identifiable, Equatable {
+            let id: UUID
+            var title: String
+            var url: URL?
+            var capturedAt: Date
+
+            var displayURL: String {
+                url?.absoluteString ?? ""
+            }
+        }
+
+        struct Note: Identifiable, Equatable {
+            let id: UUID
+            var text: String
+            var createdAt: Date
+        }
+
+        struct Link: Identifiable, Equatable {
+            let id: UUID
+            var title: String
+            var url: URL?
+            var createdAt: Date
+
+            var displayTitle: String {
+                let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+                return url?.absoluteString ?? "Untitled Link"
+            }
+        }
+
+        struct ImageResource: Identifiable, Equatable {
+            let id: UUID
+            var url: URL?
+            var caption: String
+            var createdAt: Date
+
+            var displayCaption: String {
+                caption.isEmpty ? "Saved Image" : caption
+            }
+        }
+
+        let id: UUID
+        var name: String
+        var createdAt: Date
+        var pinnedTabs: [PinnedTab]
+        var notes: [Note]
+        var links: [Link]
+        var images: [ImageResource]
+
+        var isEmpty: Bool {
+            pinnedTabs.isEmpty && notes.isEmpty && links.isEmpty && images.isEmpty
+        }
+    }
+
     enum SplitOrientation: Equatable {
         case horizontal
         case vertical
@@ -116,6 +171,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published private(set) var addressSuggestions: [HistoryEntry]
     @Published private(set) var isShowingAddressSuggestions: Bool
     @Published private(set) var highlightedAddressSuggestionID: UUID?
+    @Published private(set) var spaces: [Space]
 
     var shouldShowProgress: Bool {
         guard let tab = currentTab, tab.kind == .web else { return false }
@@ -222,6 +278,20 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.addressSuggestions = []
         self.isShowingAddressSuggestions = false
         self.highlightedAddressSuggestionID = nil
+        self.spaces = [
+            Space(
+                id: UUID(),
+                name: "Creative Corner",
+                createdAt: Date(),
+                pinnedTabs: [],
+                notes: [
+                    Space.Note(id: UUID(), text: "Capture sparks of inspiration and return when you're ready to build.", createdAt: Date())
+                ],
+                links: [],
+                images: []
+            )
+        ]
+
         super.init()
         restorePreviousSessionIfNeeded()
     }
@@ -276,6 +346,137 @@ final class BrowserViewModel: NSObject, ObservableObject {
         if let entry = downloadIDs.first(where: { $0.value == id }) {
             downloadIDs.removeValue(forKey: entry.key)
         }
+    }
+
+    // MARK: - Spaces
+
+    func space(with id: UUID) -> Space? {
+        spaces.first(where: { $0.id == id })
+    }
+
+    func createSpace(title: String = "New Space") {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? "Untitled Space" : trimmed
+        let space = Space(
+            id: UUID(),
+            name: name,
+            createdAt: Date(),
+            pinnedTabs: [],
+            notes: [],
+            links: [],
+            images: []
+        )
+        spaces.insert(space, at: 0)
+    }
+
+    func deleteSpace(_ id: UUID) {
+        if let index = spaces.firstIndex(where: { $0.id == id }) {
+            spaces.remove(at: index)
+        }
+    }
+
+    func renameSpace(_ id: UUID, to name: String) {
+        updateSpace(id) { space in
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            space.name = trimmed.isEmpty ? space.name : trimmed
+        }
+    }
+
+    func pinCurrentTab(in spaceID: UUID) {
+        guard let tab = currentTab else { return }
+        let pinned = Space.PinnedTab(
+            id: UUID(),
+            title: tab.title,
+            url: tab.currentURL ?? URL(string: tab.addressBarText.trimmingCharacters(in: .whitespacesAndNewlines)),
+            capturedAt: Date()
+        )
+        updateSpace(spaceID) { space in
+            if !space.pinnedTabs.contains(where: { $0.url == pinned.url && $0.title == pinned.title }) {
+                space.pinnedTabs.insert(pinned, at: 0)
+            }
+        }
+    }
+
+    func removePinnedTab(in spaceID: UUID, pinnedID: UUID) {
+        updateSpace(spaceID) { space in
+            if let index = space.pinnedTabs.firstIndex(where: { $0.id == pinnedID }) {
+                space.pinnedTabs.remove(at: index)
+            }
+        }
+    }
+
+    func openPinnedTab(spaceID: UUID, pinnedID: UUID) {
+        guard let space = space(with: spaceID),
+              let pinned = space.pinnedTabs.first(where: { $0.id == pinnedID }),
+              let url = pinned.url
+        else { return }
+        openNewTab(with: url)
+    }
+
+    func addNote(to spaceID: UUID, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let note = Space.Note(id: UUID(), text: trimmed, createdAt: Date())
+        updateSpace(spaceID) { space in
+            space.notes.insert(note, at: 0)
+        }
+    }
+
+    func removeNote(in spaceID: UUID, noteID: UUID) {
+        updateSpace(spaceID) { space in
+            if let index = space.notes.firstIndex(where: { $0.id == noteID }) {
+                space.notes.remove(at: index)
+            }
+        }
+    }
+
+    func addLink(to spaceID: UUID, title: String, urlString: String) {
+        let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty else { return }
+        let link = Space.Link(
+            id: UUID(),
+            title: title,
+            url: URL(string: trimmedURL),
+            createdAt: Date()
+        )
+        updateSpace(spaceID) { space in
+            space.links.insert(link, at: 0)
+        }
+    }
+
+    func removeLink(in spaceID: UUID, linkID: UUID) {
+        updateSpace(spaceID) { space in
+            if let index = space.links.firstIndex(where: { $0.id == linkID }) {
+                space.links.remove(at: index)
+            }
+        }
+    }
+
+    func addImage(to spaceID: UUID, urlString: String, caption: String) {
+        let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty else { return }
+        let image = Space.ImageResource(
+            id: UUID(),
+            url: URL(string: trimmedURL),
+            caption: caption,
+            createdAt: Date()
+        )
+        updateSpace(spaceID) { space in
+            space.images.insert(image, at: 0)
+        }
+    }
+
+    func removeImage(in spaceID: UUID, imageID: UUID) {
+        updateSpace(spaceID) { space in
+            if let index = space.images.firstIndex(where: { $0.id == imageID }) {
+                space.images.remove(at: index)
+            }
+        }
+    }
+
+    private func updateSpace(_ id: UUID, _ update: (inout Space) -> Void) {
+        guard let index = spaces.firstIndex(where: { $0.id == id }) else { return }
+        update(&spaces[index])
     }
 
     func handleIncomingURL(_ url: URL) {
