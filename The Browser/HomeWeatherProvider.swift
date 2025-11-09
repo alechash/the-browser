@@ -1,6 +1,8 @@
 import Foundation
 import WeatherKit
 import CoreLocation
+import Combine
+import MapKit
 
 @MainActor
 final class HomeWeatherProvider: NSObject, ObservableObject {
@@ -82,30 +84,50 @@ final class HomeWeatherProvider: NSObject, ObservableObject {
     }
 
     private func resolveLocationName(for location: CLLocation) async -> String? {
-        await withCheckedContinuation { continuation in
-            CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
-                guard let placemark = placemarks?.first else {
-                    continuation.resume(returning: nil)
-                    return
-                }
+        // Prefer MapKit-based lookup to avoid deprecated CLGeocoder
+        // Strategy: Run a local search near the coordinate with a broad query to find the most relevant nearby place/city
+        // Then construct a friendly name from the MKPlacemark fields.
+        let coordinate = location.coordinate
+        let span = MKCoordinateSpan(latitudeDelta: 0.5, longitudeDelta: 0.5)
+        let region = MKCoordinateRegion(center: coordinate, span: span)
 
-                if let locality = placemark.locality, let admin = placemark.administrativeArea {
-                    continuation.resume(returning: "\(locality), \(admin)")
-                    return
-                }
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = nil // broad search
+        request.region = region
 
-                if let locality = placemark.locality {
-                    continuation.resume(returning: locality)
-                    return
-                }
+        do {
+            let search = MKLocalSearch(request: request)
+            let response = try await search.start()
 
-                if let name = placemark.name {
-                    continuation.resume(returning: name)
-                    return
-                }
+            // Prefer the first result; fall back to using an MKPlacemark made from the coordinate
+            let placemark: MKPlacemark? = response.mapItems.first?.placemark ?? MKPlacemark(coordinate: coordinate)
 
-                continuation.resume(returning: nil)
+            if let locality = placemark?.locality, let admin = placemark?.administrativeArea, !locality.isEmpty {
+                return "\(locality), \(admin)"
             }
+
+            if let locality = placemark?.locality, !locality.isEmpty {
+                return locality
+            }
+
+            if let name = placemark?.name, !name.isEmpty {
+                return name
+            }
+
+            return nil
+        } catch {
+            // If the search fails, try a lightweight fallback using MKPlacemark from the coordinate
+            let fallbackPlacemark = MKPlacemark(coordinate: coordinate)
+            if let locality = fallbackPlacemark.locality, let admin = fallbackPlacemark.administrativeArea, !locality.isEmpty {
+                return "\(locality), \(admin)"
+            }
+            if let locality = fallbackPlacemark.locality, !locality.isEmpty {
+                return locality
+            }
+            if let name = fallbackPlacemark.name, !name.isEmpty {
+                return name
+            }
+            return nil
         }
     }
 }

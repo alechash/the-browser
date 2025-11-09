@@ -281,10 +281,12 @@ private struct SearchCardView: View {
                     .textFieldStyle(.plain)
                     .foregroundStyle(Color.white)
                     .disableAutocorrection(true)
-                    .textInputAutocapitalization(.never)
                     .focused(isSearchFieldFocused)
-                    .submitLabel(.search)
                     .onSubmit(submitSearch)
+                #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.search)
+                #endif
 
                 Button(action: submitSearch) {
                     Label("Go", systemImage: "arrow.up.right.circle.fill")
