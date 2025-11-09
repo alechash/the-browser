@@ -230,6 +230,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
         currentTab?.addressBarText ?? ""
     }
 
+    var currentTabTitle: String {
+        currentTab?.displayTitle ?? ""
+    }
+
     var currentTabExists: Bool {
         currentTab != nil
     }
@@ -561,6 +565,14 @@ final class BrowserViewModel: NSObject, ObservableObject {
                 space.links.remove(at: index)
             }
         }
+    }
+
+    func openLink(spaceID: UUID, linkID: UUID) {
+        guard let space = space(with: spaceID),
+              let link = space.links.first(where: { $0.id == linkID }),
+              let url = link.url
+        else { return }
+        openNewTab(with: url)
     }
 
     func addImage(to spaceID: UUID, urlString: String, caption: String) {
@@ -1909,8 +1921,9 @@ extension BrowserViewModel {
 
 extension BrowserViewModel: WKUIDelegate {
 #if os(macOS)
+    @available(macOS 12.0, *)
     func webView(_ webView: WKWebView, contextMenuItemsForElement elementInfo: WKContextMenuElementInfo, defaultMenuItems: [WKContextMenuItem]) -> [WKContextMenuItem] {
-        guard #available(macOS 12.0, *), let imageURL = elementInfo.imageURL else {
+        guard let imageURL = elementInfo.imageURL else {
             return defaultMenuItems
         }
 
@@ -1930,6 +1943,7 @@ extension BrowserViewModel: WKUIDelegate {
 
         return items
     }
+
 #endif
 
 #if os(iOS)

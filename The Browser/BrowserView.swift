@@ -325,6 +325,9 @@ private struct BrowserSidebar: View {
     let addressFieldController: AddressFieldController
     @State private var isInteractingWithAddressSuggestions = false
 #endif
+    @State private var isCreatingSpace = false
+    @State private var newSpaceName: String = ""
+    @FocusState private var isSpaceCreationFieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -716,8 +719,8 @@ private struct BrowserSidebar: View {
                     .font(.caption)
                     .foregroundStyle(appearance.secondary)
                 Spacer()
-                Button(action: { viewModel.createSpace() }) {
-                    Image(systemName: "plus.folder")
+                Button(action: toggleSpaceCreation) {
+                    Image(systemName: isCreatingSpace ? "xmark" : "plus.folder")
                         .font(.system(size: 14, weight: .bold))
                         .frame(width: 28, height: 28)
                         .foregroundStyle(appearance.primary)
@@ -725,8 +728,19 @@ private struct BrowserSidebar: View {
                 .buttonStyle(.plain)
                 .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 14, includeShadow: false)
 #if os(macOS)
-                .help("Create Space")
+                .help(isCreatingSpace ? "Cancel" : "Create Space")
 #endif
+            }
+
+            if isCreatingSpace {
+                SpaceCreationRow(
+                    name: $newSpaceName,
+                    appearance: appearance,
+                    isFieldFocused: $isSpaceCreationFieldFocused,
+                    commitAction: commitNewSpace,
+                    cancelAction: cancelNewSpace
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
 
             if viewModel.spaces.isEmpty {
@@ -748,6 +762,38 @@ private struct BrowserSidebar: View {
                     }
                 }
             }
+        }
+    }
+
+    private func toggleSpaceCreation() {
+        if isCreatingSpace {
+            cancelNewSpace()
+        } else {
+            newSpaceName = ""
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isCreatingSpace = true
+            }
+            DispatchQueue.main.async {
+                isSpaceCreationFieldFocused = true
+            }
+        }
+    }
+
+    private func commitNewSpace() {
+        let trimmed = newSpaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        viewModel.createSpace(title: trimmed.isEmpty ? "New Space" : trimmed)
+        newSpaceName = ""
+        isSpaceCreationFieldFocused = false
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isCreatingSpace = false
+        }
+    }
+
+    private func cancelNewSpace() {
+        newSpaceName = ""
+        isSpaceCreationFieldFocused = false
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isCreatingSpace = false
         }
     }
 
@@ -865,6 +911,57 @@ private struct BrowserSidebar: View {
     }
 }
 
+private struct SpaceCreationRow: View {
+    @Binding var name: String
+    let appearance: BrowserSidebarAppearance
+    var isFieldFocused: FocusState<Bool>.Binding
+    let commitAction: () -> Void
+    let cancelAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("New Space")
+                .font(.caption)
+                .foregroundStyle(appearance.secondary)
+
+            HStack(spacing: 10) {
+                TextField("Creative Hub", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .focused(isFieldFocused)
+                    .onSubmit(commitAction)
+
+                Button(action: commitAction) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 28, height: 28)
+                        .foregroundStyle(appearance.primary)
+                }
+                .buttonStyle(.plain)
+                .liquidGlassBackground(tint: appearance.controlTint.opacity(0.95), cornerRadius: 14, includeShadow: false)
+
+                Button(action: cancelAction) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 28, height: 28)
+                        .foregroundStyle(appearance.primary)
+                }
+                .buttonStyle(.plain)
+                .liquidGlassBackground(tint: appearance.controlTint.opacity(0.65), cornerRadius: 14, includeShadow: false)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(appearance.controlTint.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(appearance.primary.opacity(0.15), lineWidth: 1)
+        )
+    }
+}
+
 private struct SpaceRow: View {
     let space: BrowserViewModel.Space
     let isSelected: Bool
@@ -975,9 +1072,16 @@ private struct SpaceWorkspaceView: View {
     @State private var linkURL: String = ""
     @State private var imageURL: String = ""
     @State private var imageCaption: String = ""
+    @FocusState private var isNoteFieldFocused: Bool
+    @FocusState private var isLinkURLFocused: Bool
+    @FocusState private var isImageURLFocused: Bool
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: 320, maximum: 420), spacing: 24)]
+    }
+
+    private var heroColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 14)]
     }
 
     private var space: BrowserViewModel.Space? {
@@ -1010,58 +1114,80 @@ private struct SpaceWorkspaceView: View {
     private var header: some View {
         Group {
             if let space {
-                VStack(alignment: .leading, spacing: 24) {
-                    HStack(alignment: .top, spacing: 20) {
-                        iconPicker(for: space)
-
-                        VStack(alignment: .leading, spacing: 10) {
-                            TextField(
-                                "Space Name",
-                                text: Binding(
-                                    get: { space.name },
-                                    set: { viewModel.renameSpace(spaceID, to: $0) }
+                VStack(alignment: .leading, spacing: 28) {
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 34, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        appearance.controlTint.opacity(0.95),
+                                        appearance.controlTint.opacity(0.55)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
                                 )
                             )
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
-                            .textFieldStyle(.plain)
-                            .foregroundStyle(appearance.primary)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 34, style: .continuous)
+                                    .stroke(appearance.primary.opacity(0.12), lineWidth: 1.2)
+                            )
 
-                            Text("Created \(formatted(date: space.createdAt))")
-                                .font(.caption)
-                                .foregroundStyle(appearance.secondary.opacity(0.8))
+                        VStack(alignment: .leading, spacing: 24) {
+                            HStack(alignment: .top, spacing: 22) {
+                                iconPicker(for: space)
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    TextField(
+                                        "Space Name",
+                                        text: Binding(
+                                            get: { space.name },
+                                            set: { viewModel.renameSpace(spaceID, to: $0) }
+                                        )
+                                    )
+                                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                                    .textFieldStyle(.plain)
+                                    .foregroundStyle(appearance.primary)
+
+                                    HStack(spacing: 10) {
+                                        SpaceBadge(text: formatted(date: space.createdAt), icon: "calendar", appearance: appearance)
+                                        if space.isEmpty {
+                                            SpaceBadge(text: "Fresh Canvas", icon: "sparkles", appearance: appearance)
+                                        }
+                                    }
+                                }
+
+                                Spacer(minLength: 0)
+
+                                Menu {
+                                    Button(role: .destructive) {
+                                        viewModel.deleteSpace(spaceID)
+                                    } label: {
+                                        Label("Delete Space", systemImage: "trash")
+                                    }
+                                } label: {
+                                    Label("Manage Space", systemImage: "ellipsis.circle")
+                                        .labelStyle(.iconOnly)
+                                        .font(.system(size: 24, weight: .semibold))
+                                        .frame(width: 52, height: 52)
+                                        .foregroundStyle(appearance.primary)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                                .fill(Color.white.opacity(0.18))
+                                        )
+                                }
+                                .menuStyle(.borderlessButton)
+#if os(macOS)
+                                .help("Space Actions")
+#endif
+                            }
+
+                            metricRow(for: space)
+
+                            heroActions(for: space)
                         }
-
-                        Spacer(minLength: 0)
-
-                        VStack(alignment: .trailing, spacing: 12) {
-                            Button {
-                                viewModel.pinCurrentTab(in: spaceID)
-                            } label: {
-                                Label("Pin Current Tab", systemImage: "pin")
-                                    .labelStyle(.titleAndIcon)
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(!viewModel.currentTabExists)
-
-                            Button {
-                                viewModel.saveCurrentTab(to: spaceID)
-                            } label: {
-                                Label("Save Current Tab", systemImage: "bookmark")
-                                    .labelStyle(.titleAndIcon)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!viewModel.currentTabExists)
-
-                            Button(role: .destructive) {
-                                viewModel.deleteSpace(spaceID)
-                            } label: {
-                                Label("Delete Space", systemImage: "trash")
-                            }
-                            .buttonStyle(.bordered)
-                        }
+                        .padding(32)
                     }
-
-                    metricRow(for: space)
+                    .shadow(color: appearance.primary.opacity(0.14), radius: 24, x: 0, y: 18)
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Icon (SF Symbol)")
@@ -1078,25 +1204,6 @@ private struct SpaceWorkspaceView: View {
                         .textFieldStyle(.roundedBorder)
                     }
                 }
-                .padding(28)
-                .background(
-                    RoundedRectangle(cornerRadius: 30, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    appearance.controlTint.opacity(0.95),
-                                    appearance.controlTint.opacity(0.65)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 30, style: .continuous)
-                        .stroke(appearance.primary.opacity(0.15), lineWidth: 1.2)
-                )
-                .shadow(color: appearance.primary.opacity(0.08), radius: 20, x: 0, y: 12)
             } else {
                 spaceUnavailable
             }
@@ -1178,6 +1285,94 @@ private struct SpaceWorkspaceView: View {
         }
     }
 
+    private func heroActions(for space: BrowserViewModel.Space) -> some View {
+        LazyVGrid(columns: heroColumns, alignment: .leading, spacing: 14) {
+            SpaceHeroAction(
+                title: "Pin Current Tab",
+                subtitle: "Keep essentials a tap away",
+                icon: "pin",
+                tint: Color.blue,
+                appearance: appearance,
+                isDisabled: !viewModel.currentTabExists,
+                action: { viewModel.pinCurrentTab(in: spaceID) }
+            )
+
+            SpaceHeroAction(
+                title: "Save for Later",
+                subtitle: "Archive the current page",
+                icon: "bookmark",
+                tint: Color.purple,
+                appearance: appearance,
+                isDisabled: !viewModel.currentTabExists,
+                action: { viewModel.saveCurrentTab(to: spaceID) }
+            )
+
+            SpaceHeroAction(
+                title: "Capture a Note",
+                subtitle: "Jot thoughts before they vanish",
+                icon: "square.and.pencil",
+                tint: Color.orange,
+                appearance: appearance,
+                isDisabled: false,
+                action: primeNoteComposer
+            )
+
+            SpaceHeroAction(
+                title: "Save a Link",
+                subtitle: "Drop in a quick reference",
+                icon: "link.badge.plus",
+                tint: Color.green,
+                appearance: appearance,
+                isDisabled: false,
+                action: primeLinkComposer
+            )
+
+            SpaceHeroAction(
+                title: "Add Image",
+                subtitle: "Collect visual inspiration",
+                icon: "photo.on.rectangle.angled",
+                tint: Color.pink,
+                appearance: appearance,
+                isDisabled: false,
+                action: primeImageComposer
+            )
+        }
+    }
+
+    private func primeNoteComposer() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isNoteFieldFocused = true
+        }
+    }
+
+    private func primeLinkComposer() {
+        if linkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let currentURL = viewModel.currentURL {
+            linkURL = currentURL.absoluteString
+        }
+        if linkTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let candidate = viewModel.currentTabTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !candidate.isEmpty {
+                linkTitle = candidate
+            } else if let host = viewModel.currentURL?.host {
+                linkTitle = host
+            }
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isLinkURLFocused = true
+        }
+    }
+
+    private func primeImageComposer() {
+        if imageURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let currentURL = viewModel.currentURL {
+            imageURL = currentURL.absoluteString
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isImageURLFocused = true
+        }
+    }
+
     private func savedTabsCard(_ space: BrowserViewModel.Space) -> some View {
         SpaceCard(title: "Saved Tabs", icon: "bookmark", appearance: appearance) {
             if space.savedTabs.isEmpty {
@@ -1187,6 +1382,13 @@ private struct SpaceWorkspaceView: View {
                     ForEach(space.savedTabs) { saved in
                         SpaceItemContainer(appearance: appearance) {
                             VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 8) {
+                                    if let host = host(from: saved.url) {
+                                        SpaceBadge(text: host, icon: "globe", appearance: appearance)
+                                    }
+                                    SpaceBadge(text: "Saved Tab", icon: "bookmark.fill", appearance: appearance)
+                                }
+
                                 Text(saved.title)
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(appearance.primary)
@@ -1280,10 +1482,12 @@ private struct SpaceWorkspaceView: View {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .fill(appearance.controlTint.opacity(0.75))
                     )
+                    .focused($isNoteFieldFocused)
 
                 Button {
                     viewModel.addNote(to: spaceID, text: noteDraft)
                     noteDraft = ""
+                    isNoteFieldFocused = false
                 } label: {
                     Label("Save Note", systemImage: "square.and.arrow.down")
                         .font(.subheadline.weight(.semibold))
@@ -1303,6 +1507,13 @@ private struct SpaceWorkspaceView: View {
                     ForEach(space.links) { link in
                         SpaceItemContainer(appearance: appearance) {
                             VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 8) {
+                                    if let host = host(from: link.url) {
+                                        SpaceBadge(text: host, icon: "link", appearance: appearance)
+                                    }
+                                    SpaceBadge(text: "Resource", icon: "book", appearance: appearance)
+                                }
+
                                 Text(link.displayTitle)
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(appearance.primary)
@@ -1318,12 +1529,22 @@ private struct SpaceWorkspaceView: View {
                                     .foregroundStyle(appearance.secondary.opacity(0.85))
                             }
 
-                            Button(role: .destructive) {
-                                viewModel.removeLink(in: spaceID, linkID: link.id)
-                            } label: {
-                                Image(systemName: "trash")
+                            Spacer(minLength: 12)
+
+                            VStack(spacing: 8) {
+                                Button("Open") {
+                                    viewModel.openLink(spaceID: spaceID, linkID: link.id)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(link.url == nil)
+
+                                Button(role: .destructive) {
+                                    viewModel.removeLink(in: spaceID, linkID: link.id)
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                                .buttonStyle(.bordered)
                             }
-                            .buttonStyle(.bordered)
                         }
                     }
                 }
@@ -1341,11 +1562,13 @@ private struct SpaceWorkspaceView: View {
 
                 TextField("https://example.com", text: $linkURL)
                     .textFieldStyle(.roundedBorder)
+                    .focused($isLinkURLFocused)
 
                 Button {
                     viewModel.addLink(to: spaceID, title: linkTitle, urlString: linkURL)
                     linkTitle = ""
                     linkURL = ""
+                    isLinkURLFocused = false
                 } label: {
                     Label("Save Link", systemImage: "link")
                         .font(.subheadline.weight(.semibold))
@@ -1381,6 +1604,7 @@ private struct SpaceWorkspaceView: View {
 
                 TextField("Image URL", text: $imageURL)
                     .textFieldStyle(.roundedBorder)
+                    .focused($isImageURLFocused)
 
                 TextField("Caption", text: $imageCaption)
                     .textFieldStyle(.roundedBorder)
@@ -1389,6 +1613,7 @@ private struct SpaceWorkspaceView: View {
                     viewModel.addImage(to: spaceID, urlString: imageURL, caption: imageCaption)
                     imageURL = ""
                     imageCaption = ""
+                    isImageURLFocused = false
                 } label: {
                     Label("Save Image", systemImage: "photo.fill.on.rectangle.fill")
                         .font(.subheadline.weight(.semibold))
@@ -1409,6 +1634,14 @@ private struct SpaceWorkspaceView: View {
                 metricChip(title: "Images", value: space.images.count, systemIcon: "photo")
             }
         }
+    }
+
+    private func host(from url: URL?) -> String? {
+        guard let rawHost = url?.host, !rawHost.isEmpty else { return nil }
+        if rawHost.lowercased().hasPrefix("www.") {
+            return String(rawHost.dropFirst(4))
+        }
+        return rawHost
     }
 
     private func metricChip(title: String, value: Int, systemIcon: String) -> some View {
@@ -1495,6 +1728,90 @@ private struct SpaceWorkspaceView: View {
     }
 }
 
+private struct SpaceBadge: View {
+    let text: String
+    let icon: String?
+    let appearance: BrowserSidebarAppearance
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            Text(text)
+                .font(.caption2.weight(.semibold))
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(appearance.controlTint.opacity(0.4))
+        )
+        .foregroundStyle(appearance.primary)
+    }
+}
+
+private struct SpaceHeroAction: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let tint: Color
+    let appearance: BrowserSidebarAppearance
+    let isDisabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 16) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 38, height: 38)
+                    .background(
+                        Circle()
+                            .fill(appearance.primary.opacity(0.15))
+                    )
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundColor(.white)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(Color.white.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                tint.opacity(0.95),
+                                tint.opacity(0.65)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(appearance.primary.opacity(0.16), lineWidth: 1)
+            )
+            .shadow(color: tint.opacity(0.25), radius: 16, x: 0, y: 12)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.35 : 1)
+    }
+}
+
 private struct SpaceCard<Content: View>: View {
     let title: String
     let icon: String
@@ -1517,7 +1834,16 @@ private struct SpaceCard<Content: View>: View {
                     .foregroundStyle(appearance.primary)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(appearance.controlTint.opacity(0.95))
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        appearance.controlTint.opacity(1),
+                                        appearance.controlTint.opacity(0.7)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
                     )
                 Text(title)
                     .font(.title3.weight(.semibold))
@@ -1530,12 +1856,22 @@ private struct SpaceCard<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(appearance.controlTint.opacity(0.72))
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            appearance.controlTint.opacity(0.78),
+                            appearance.controlTint.opacity(0.52)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
                 .stroke(appearance.primary.opacity(0.08), lineWidth: 1)
         )
+        .shadow(color: appearance.primary.opacity(0.08), radius: 16, x: 0, y: 10)
     }
 }
 
@@ -1555,7 +1891,20 @@ private struct SpaceItemContainer<Content: View>: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(appearance.controlTint.opacity(0.92))
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            appearance.controlTint.opacity(0.98),
+                            appearance.controlTint.opacity(0.75)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(appearance.primary.opacity(0.05), lineWidth: 1)
         )
     }
 }
