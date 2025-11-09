@@ -289,6 +289,7 @@ private struct BrowserSidebar: View {
     var isAddressFocused: FocusState<Bool>.Binding
     @Binding var isShowingSettings: Bool
     let enterFullscreen: () -> Void
+    @State private var addressFieldWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {

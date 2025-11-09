@@ -1532,6 +1532,8 @@ extension BrowserViewModel.TabState {
             return "Hello"
         case .web:
             break
+        case .history:
+            return "History"
         }
         if let host = currentURL?.host, !host.isEmpty {
             return host
