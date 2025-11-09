@@ -290,6 +290,9 @@ private struct BrowserSidebar: View {
     @Binding var isShowingSettings: Bool
     let enterFullscreen: () -> Void
     @State private var addressFieldWidth: CGFloat = 0
+#if os(macOS)
+    @State private var isInteractingWithAddressSuggestions = false
+#endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -513,16 +516,14 @@ private struct BrowserSidebar: View {
             .onChange(of: isAddressFocused.wrappedValue) { focused in
 #if os(macOS)
                 if !focused {
-                    if viewModel.isShowingAddressSuggestions {
-                        DispatchQueue.main.async {
-                            if viewModel.isShowingAddressSuggestions {
-                                isAddressFocused.wrappedValue = true
-                            } else {
-                                viewModel.setAddressFieldFocus(false)
-                            }
+                    DispatchQueue.main.async {
+                        if isInteractingWithAddressSuggestions && viewModel.isShowingAddressSuggestions {
+                            isAddressFocused.wrappedValue = true
+                        } else {
+                            viewModel.setAddressFieldFocus(false)
                         }
-                        return
                     }
+                    return
                 }
 #endif
                 viewModel.setAddressFieldFocus(focused)
@@ -602,6 +603,14 @@ private struct BrowserSidebar: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 6)
         .liquidGlassBackground(tint: appearance.controlTint.opacity(0.9), cornerRadius: 20)
+#if os(macOS)
+        .onHover { hovering in
+            isInteractingWithAddressSuggestions = hovering
+        }
+        .onDisappear {
+            isInteractingWithAddressSuggestions = false
+        }
+#endif
     }
 
     private func suggestionRow(

@@ -177,6 +177,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private static let sessionStorageKey = "browser.session.state"
     private static let historyStorageKey = "browser.history.entries"
     private static let historyLimit = 500
+#if os(macOS)
+    private static let modernUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+#else
+    private static let modernUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+#endif
     private var hasLoadedInitialPage = false
     private var isRestoringSession = false
     private var webViews: [UUID: WKWebView]
@@ -944,6 +949,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webViewToTabID[ObjectIdentifier(webView)] = tabID
+#if os(macOS) || os(iOS)
+        webView.customUserAgent = Self.modernUserAgent
+#endif
 
         progressObservations[tabID]?.invalidate()
         progressObservations[tabID] = webView.observe(\.estimatedProgress, options: .new) { [weak self] webView, _ in
