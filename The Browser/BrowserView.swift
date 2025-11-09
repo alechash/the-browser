@@ -57,6 +57,7 @@ struct BrowserView: View {
             .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
 
             if !isWebContentFullscreen {
+                #if os(macOS)
                 BrowserSidebar(
                     viewModel: viewModel,
                     appearance: viewModel.sidebarAppearance,
@@ -67,6 +68,17 @@ struct BrowserView: View {
                 )
                 .frame(width: sidebarWidth)
                 .transition(.move(edge: .leading).combined(with: .opacity))
+                #else
+                BrowserSidebar(
+                    viewModel: viewModel,
+                    appearance: viewModel.sidebarAppearance,
+                    isAddressFocused: $isAddressFocused,
+                    isShowingSettings: $isShowingSettings,
+                    enterFullscreen: { withAnimation { isWebContentFullscreen = true } }
+                )
+                .frame(width: sidebarWidth)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+                #endif
             }
 
             if isWebContentFullscreen {
