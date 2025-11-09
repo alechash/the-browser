@@ -41,6 +41,24 @@ final class BrowserViewModel: NSObject, ObservableObject {
         var sourceURL: URL?
     }
 
+    struct HistoryEntry: Identifiable, Codable, Equatable {
+        let id: UUID
+        var url: URL
+        var title: String
+        var lastVisited: Date
+        var visitCount: Int
+        var normalizedURL: String
+
+        var displayTitle: String {
+            let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? url.absoluteString : trimmed
+        }
+
+        var displayURL: String {
+            url.absoluteString
+        }
+    }
+
     enum SplitOrientation: Equatable {
         case horizontal
         case vertical
@@ -80,6 +98,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
 #endif
             updateSidebarAppearanceForSelection()
             persistSessionIfNeeded()
+            clearAddressSuggestions()
         }
     }
     @Published var sidebarAppearance: BrowserSidebarAppearance
@@ -90,6 +109,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
 #endif
     @Published private var splitViewFractions: [UUID: CGFloat]
     @Published private(set) var downloads: [DownloadItem]
+    @Published private(set) var history: [HistoryEntry]
+    @Published private(set) var addressSuggestions: [HistoryEntry]
+    @Published private(set) var isShowingAddressSuggestions: Bool
 
     var shouldShowProgress: Bool {
         guard let tab = currentTab, tab.kind == .web else { return false }
@@ -145,6 +167,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private let settings: BrowserSettings
     private let sessionDefaults: UserDefaults
     private static let sessionStorageKey = "browser.session.state"
+    private static let historyStorageKey = "browser.history.entries"
+    private static let historyLimit = 500
     private var hasLoadedInitialPage = false
     private var isRestoringSession = false
     private var webViews: [UUID: WKWebView]
@@ -158,6 +182,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
 #endif
     private var downloadIDs: [ObjectIdentifier: UUID]
     private var downloadDestinations: [UUID: URL]
+    private var isAddressFieldFocused = false
 
     init(settings: BrowserSettings, userDefaults: UserDefaults = .standard) {
         self.settings = settings
@@ -180,6 +205,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.downloads = []
         self.downloadIDs = [:]
         self.downloadDestinations = [:]
+        self.history = BrowserViewModel.loadHistory(from: userDefaults)
+        self.addressSuggestions = []
+        self.isShowingAddressSuggestions = false
         super.init()
         restorePreviousSessionIfNeeded()
     }
@@ -264,6 +292,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     func openNewTab(with url: URL?) {
+        clearAddressSuggestions()
         let tabID = UUID()
         let isWebTab = url != nil
         let newTab = TabState(
@@ -481,6 +510,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard let id = selectedTabID,
               let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs[index].addressBarText = text
+        updateAddressSuggestions(for: text)
     }
 
     func submitAddress() {
@@ -496,6 +526,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
             targetURL = settings.searchURL(for: input)
         }
 
+        clearAddressSuggestions()
         load(url: targetURL, in: id)
     }
 
@@ -529,6 +560,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         pendingURLs[id] = url
         _ = makeConfiguredWebView(for: id)
         attemptToLoadPendingURL(for: id)
+        clearAddressSuggestions()
     }
 
     func reloadCurrentTab() {
@@ -564,6 +596,23 @@ final class BrowserViewModel: NSObject, ObservableObject {
         } else {
             showNativeHome(in: id)
         }
+    }
+
+    func setAddressFieldFocus(_ isFocused: Bool) {
+        isAddressFieldFocused = isFocused
+        if isFocused {
+            updateAddressSuggestions(for: currentAddressText)
+        } else {
+            clearAddressSuggestions()
+        }
+    }
+
+    func selectAddressSuggestion(_ entry: HistoryEntry) {
+        guard let id = selectedTabID,
+              let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[index].addressBarText = entry.url.absoluteString
+        clearAddressSuggestions()
+        load(url: entry.url, in: id)
     }
 
     func openInspector() {
@@ -769,6 +818,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         updatePopOutWindowTitle(for: id)
 #endif
         sanitizeSplitViewTabs()
+        clearAddressSuggestions()
     }
 
     private func defaultTitle(for kind: TabState.Kind) -> String {
@@ -1222,6 +1272,112 @@ final class BrowserViewModel: NSObject, ObservableObject {
         return NSColor(calibratedRed: red, green: green, blue: blue, alpha: alpha)
     }
 #endif
+
+    private func updateAddressSuggestions(for text: String) {
+        guard isAddressFieldFocused else {
+            isShowingAddressSuggestions = false
+            addressSuggestions = []
+            return
+        }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercased = trimmed.lowercased()
+
+        let suggestions: [HistoryEntry]
+        if lowercased.isEmpty {
+            suggestions = history.sorted { $0.lastVisited > $1.lastVisited }
+        } else {
+            suggestions = history.filter { entry in
+                entry.displayTitle.lowercased().contains(lowercased) ||
+                entry.displayURL.lowercased().contains(lowercased)
+            }
+            .sorted { lhs, rhs in
+                if lhs.lastVisited == rhs.lastVisited {
+                    return lhs.visitCount > rhs.visitCount
+                }
+                return lhs.lastVisited > rhs.lastVisited
+            }
+        }
+
+        addressSuggestions = Array(suggestions.prefix(8))
+        isShowingAddressSuggestions = !addressSuggestions.isEmpty
+    }
+
+    private func clearAddressSuggestions() {
+        addressSuggestions = []
+        isShowingAddressSuggestions = false
+    }
+
+    private func recordHistoryVisit(url: URL, title: String?) {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
+        let normalizedURL = BrowserViewModel.normalizedHistoryKey(for: url)
+        let visitTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle: String
+        if let visitTitle, !visitTitle.isEmpty {
+            resolvedTitle = visitTitle
+        } else if let host = url.host {
+            resolvedTitle = host
+        } else {
+            resolvedTitle = url.absoluteString
+        }
+
+        var updatedHistory = history
+
+        if let index = updatedHistory.firstIndex(where: { $0.normalizedURL == normalizedURL }) {
+            var entry = updatedHistory[index]
+            entry.title = resolvedTitle
+            entry.lastVisited = Date()
+            entry.visitCount += 1
+            entry.url = url
+            updatedHistory[index] = entry
+        } else {
+            let entry = HistoryEntry(
+                id: UUID(),
+                url: url,
+                title: resolvedTitle,
+                lastVisited: Date(),
+                visitCount: 1,
+                normalizedURL: normalizedURL
+            )
+            updatedHistory.append(entry)
+        }
+
+        updatedHistory.sort { $0.lastVisited > $1.lastVisited }
+        if updatedHistory.count > BrowserViewModel.historyLimit {
+            updatedHistory = Array(updatedHistory.prefix(BrowserViewModel.historyLimit))
+        }
+
+        history = updatedHistory
+        if isAddressFieldFocused {
+            updateAddressSuggestions(for: currentAddressText)
+        }
+        persistHistory()
+    }
+
+    private func persistHistory() {
+        guard let data = try? JSONEncoder().encode(history) else { return }
+        sessionDefaults.set(data, forKey: BrowserViewModel.historyStorageKey)
+    }
+
+    private static func loadHistory(from defaults: UserDefaults) -> [HistoryEntry] {
+        guard let data = defaults.data(forKey: BrowserViewModel.historyStorageKey),
+              let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) else {
+            return []
+        }
+        return decoded.sorted { $0.lastVisited > $1.lastVisited }
+    }
+
+    private static func normalizedHistoryKey(for url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString.lowercased()
+        }
+        components.fragment = nil
+        if components.path.isEmpty {
+            components.path = "/"
+        }
+        let normalized = components.string ?? url.absoluteString
+        return normalized.lowercased()
+    }
 }
 
 extension BrowserViewModel.TabState {
@@ -1332,6 +1488,10 @@ extension BrowserViewModel: WKNavigationDelegate {
         captureSidebarAppearance(from: webView, for: tabID)
         updatePopOutWindowTitle(for: tabID)
 #endif
+        if let url = webView.url {
+            recordHistoryVisit(url: url, title: webView.title)
+        }
+        clearAddressSuggestions()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

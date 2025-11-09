@@ -450,6 +450,9 @@ private struct BrowserSidebar: View {
             }
             .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
             .tint(appearance.primary)
+            .onChange(of: isAddressFocused.wrappedValue) { focused in
+                viewModel.setAddressFieldFocus(focused)
+            }
             .onSubmit {
                 viewModel.submitAddress()
                 isAddressFocused.wrappedValue = false
@@ -460,7 +463,49 @@ private struct BrowserSidebar: View {
             .disableAutocorrection(true)
             .submitLabel(.go)
 #endif
+
+            if viewModel.isShowingAddressSuggestions {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(viewModel.addressSuggestions) { suggestion in
+                        Button {
+                            viewModel.selectAddressSuggestion(suggestion)
+                            isAddressFocused.wrappedValue = false
+                        } label: {
+                            suggestionRow(for: suggestion)
+                        }
+                        .buttonStyle(.plain)
+
+                        if suggestion.id != viewModel.addressSuggestions.last?.id {
+                            Rectangle()
+                                .fill(appearance.primary.opacity(0.1))
+                                .frame(height: 1)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+                .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
         }
+    }
+
+    private func suggestionRow(for suggestion: BrowserViewModel.HistoryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(suggestion.displayTitle)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundStyle(appearance.primary)
+
+            Text(suggestion.displayURL)
+                .font(.caption2)
+                .foregroundStyle(appearance.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private var divider: some View {
