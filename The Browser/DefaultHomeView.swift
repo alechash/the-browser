@@ -5,6 +5,7 @@ struct DefaultHomeView: View {
     let onSubmitSearch: (String) -> Void
     let onOpenURL: (URL) -> Void
     let onOpenNewTab: () -> Void
+    let onOpenHistory: () -> Void
     let onOpenSettings: () -> Void
 
     @State private var searchQuery = ""
@@ -194,6 +195,12 @@ struct DefaultHomeView: View {
                 symbol: "slider.horizontal.3",
                 detail: "Adjust your experience",
                 action: .settings
+            ),
+            .init(
+                title: "Browse history",
+                symbol: "clock",
+                detail: "Revisit recently viewed pages",
+                action: .history
             )
         ]
     }
@@ -248,6 +255,8 @@ struct DefaultHomeView: View {
             onSubmitSearch(query)
         case .open(let url):
             onOpenURL(url)
+        case .history:
+            onOpenHistory()
         case .settings:
             onOpenSettings()
         }
@@ -373,6 +382,7 @@ private struct QuickLink: Identifiable {
         case newTab
         case search(String)
         case open(URL)
+        case history
         case settings
     }
 
@@ -389,6 +399,7 @@ private struct QuickLink: Identifiable {
         onSubmitSearch: { _ in },
         onOpenURL: { _ in },
         onOpenNewTab: {},
+        onOpenHistory: {},
         onOpenSettings: {}
     )
 }

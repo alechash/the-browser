@@ -9,6 +9,7 @@ struct BrowserView: View {
     @FocusState private var isAddressFocused: Bool
     @State private var isShowingSettings = false
     @State private var isWebContentFullscreen = false
+    @State private var addressFieldWidth: CGFloat = 0
 
     private let sidebarWidth: CGFloat = 288
 
@@ -20,9 +21,12 @@ struct BrowserView: View {
 
     var body: some View {
         let activeWebTabs = viewModel.activeWebViewTabIDs
+        let currentTabKind = viewModel.currentTabKind
         ZStack(alignment: .leading) {
             Group {
-                if activeWebTabs.isEmpty {
+                if currentTabKind == .history {
+                    HistoryView(viewModel: viewModel)
+                } else if activeWebTabs.isEmpty {
                     DefaultHomeView(
                         settings: settings,
                         onSubmitSearch: { query in
@@ -33,6 +37,9 @@ struct BrowserView: View {
                         },
                         onOpenNewTab: {
                             viewModel.openNewTab()
+                        },
+                        onOpenHistory: {
+                            viewModel.openHistoryTab()
                         },
                         onOpenSettings: {
                             isShowingSettings = true
@@ -268,12 +275,21 @@ private final class NonDraggableNSView: NSView {
 }
 #endif
 
+private struct AddressFieldWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private struct BrowserSidebar: View {
     @ObservedObject var viewModel: BrowserViewModel
     let appearance: BrowserSidebarAppearance
     var isAddressFocused: FocusState<Bool>.Binding
     @Binding var isShowingSettings: Bool
     let enterFullscreen: () -> Void
+    @State private var addressFieldWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -409,6 +425,14 @@ private struct BrowserSidebar: View {
             )
 
             NavigationControlButton(
+                symbol: "clock",
+                help: "History",
+                isEnabled: true,
+                appearance: appearance,
+                action: viewModel.openHistoryTab
+            )
+
+            NavigationControlButton(
                 symbol: "arrow.up.left.and.arrow.down.right",
                 help: "Enter Fullscreen",
                 isEnabled: viewModel.isCurrentTabDisplayingWebContent,
@@ -424,13 +448,44 @@ private struct BrowserSidebar: View {
                 .font(.caption)
                 .foregroundStyle(appearance.secondary)
 
-            TextField(
-                "Search or enter website name",
-                text: Binding(
-                    get: { viewModel.currentAddressText },
-                    set: { viewModel.updateAddressText($0) }
-                )
-            )
+            addressTextInput
+#if os(iOS)
+            if viewModel.isShowingAddressSuggestions {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(viewModel.addressSuggestions) { suggestion in
+                        Button {
+                            viewModel.selectAddressSuggestion(suggestion)
+                            isAddressFocused.wrappedValue = false
+                        } label: {
+                            suggestionRow(for: suggestion, isHighlighted: false)
+                        }
+                        .buttonStyle(.plain)
+
+                        if suggestion.id != viewModel.addressSuggestions.last?.id {
+                            Rectangle()
+                                .fill(appearance.primary.opacity(0.1))
+                                .frame(height: 1)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+                .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+#endif
+        }
+        .onPreferenceChange(AddressFieldWidthPreferenceKey.self) { width in
+            addressFieldWidth = width
+        }
+    }
+
+    private var addressTextInput: some View {
+        let textBinding = Binding(
+            get: { viewModel.currentAddressText },
+            set: { viewModel.updateAddressText($0) }
+        )
+
+        return TextField("Search or enter website name", text: textBinding)
             .focused(isAddressFocused)
             .textFieldStyle(.plain)
             .foregroundColor(appearance.primary)
@@ -448,8 +503,30 @@ private struct BrowserSidebar: View {
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
             }
+            .background(
+                GeometryReader { geometry in
+                    Color.clear.preference(key: AddressFieldWidthPreferenceKey.self, value: geometry.size.width)
+                }
+            )
             .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
             .tint(appearance.primary)
+            .onChange(of: isAddressFocused.wrappedValue) { focused in
+#if os(macOS)
+                if !focused {
+                    if viewModel.isShowingAddressSuggestions {
+                        DispatchQueue.main.async {
+                            if viewModel.isShowingAddressSuggestions {
+                                isAddressFocused.wrappedValue = true
+                            } else {
+                                viewModel.setAddressFieldFocus(false)
+                            }
+                        }
+                        return
+                    }
+                }
+#endif
+                viewModel.setAddressFieldFocus(focused)
+            }
             .onSubmit {
                 viewModel.submitAddress()
                 isAddressFocused.wrappedValue = false
@@ -459,8 +536,103 @@ private struct BrowserSidebar: View {
             .keyboardType(.URL)
             .disableAutocorrection(true)
             .submitLabel(.go)
+#else
+            .onMoveCommand { direction in
+                switch direction {
+                case .down:
+                    viewModel.highlightNextAddressSuggestion()
+                case .up:
+                    viewModel.highlightPreviousAddressSuggestion()
+                default:
+                    break
+                }
+            }
+            .onExitCommand {
+                viewModel.dismissAddressSuggestions()
+            }
+            .popover(
+                isPresented: Binding(
+                    get: { viewModel.isShowingAddressSuggestions },
+                    set: { isPresented in
+                        if !isPresented {
+                            viewModel.dismissAddressSuggestions()
+                        }
+                    }
+                ),
+                attachmentAnchor: .rect(.bounds),
+                arrowEdge: .bottom
+            ) {
+                addressSuggestionsPopover
+                    .frame(width: max(addressFieldWidth, 220))
+            }
 #endif
+    }
+
+    private var addressSuggestionsPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(viewModel.addressSuggestions) { suggestion in
+                Button {
+                    viewModel.selectAddressSuggestion(suggestion)
+                    isAddressFocused.wrappedValue = false
+                } label: {
+                    suggestionRow(
+                        for: suggestion,
+                        isHighlighted: viewModel.highlightedAddressSuggestionID == suggestion.id
+                    )
+                }
+                .buttonStyle(.plain)
+#if os(macOS)
+                .focusable(false)
+#endif
+#if os(macOS)
+                .onHover { hovering in
+                    if hovering {
+                        viewModel.setHighlightedAddressSuggestion(suggestion)
+                    }
+                }
+#endif
+
+                if suggestion.id != viewModel.addressSuggestions.last?.id {
+                    Rectangle()
+                        .fill(appearance.primary.opacity(0.08))
+                        .frame(height: 1)
+                }
+            }
         }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 6)
+        .liquidGlassBackground(tint: appearance.controlTint.opacity(0.9), cornerRadius: 20)
+    }
+
+    private func suggestionRow(
+        for suggestion: BrowserViewModel.HistoryEntry,
+        isHighlighted: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(suggestion.displayTitle)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundStyle(appearance.primary)
+
+            Text(suggestion.displayURL)
+                .font(.caption2)
+                .foregroundStyle(appearance.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    appearance.primary.opacity(
+                        isHighlighted ? 0.18 : 0.06
+                    )
+                )
+        )
+        .padding(.horizontal, 2)
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var divider: some View {
