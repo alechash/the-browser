@@ -496,6 +496,20 @@ private struct BrowserSidebar: View {
             .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
             .tint(appearance.primary)
             .onChange(of: isAddressFocused.wrappedValue) { focused in
+#if os(macOS)
+                if !focused {
+                    if viewModel.isShowingAddressSuggestions {
+                        DispatchQueue.main.async {
+                            if viewModel.isShowingAddressSuggestions {
+                                isAddressFocused.wrappedValue = true
+                            } else {
+                                viewModel.setAddressFieldFocus(false)
+                            }
+                        }
+                        return
+                    }
+                }
+#endif
                 viewModel.setAddressFieldFocus(focused)
             }
             .onSubmit {
@@ -552,6 +566,9 @@ private struct BrowserSidebar: View {
                     )
                 }
                 .buttonStyle(.plain)
+#if os(macOS)
+                .focusable(false)
+#endif
 #if os(macOS)
                 .onHover { hovering in
                     if hovering {
