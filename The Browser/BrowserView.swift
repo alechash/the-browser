@@ -1067,6 +1067,7 @@ private struct MacAddressTextField: NSViewRepresentable {
         textField.delegate = context.coordinator
         textField.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         textField.stringValue = text
+        context.coordinator.textField = textField
         return textField
     }
 
@@ -1076,7 +1077,9 @@ private struct MacAddressTextField: NSViewRepresentable {
         }
 
         context.coordinator.parent = self
+        context.coordinator.textField = nsView
 
+        let wasFocused = context.coordinator.lastFocusValue
         let isFirstResponder = nsView.window?.firstResponder === nsView.currentEditor()
         var shouldSelectAll = false
         if context.coordinator.lastFocusTrigger != focusTrigger {
@@ -1084,18 +1087,14 @@ private struct MacAddressTextField: NSViewRepresentable {
             context.coordinator.lastFocusTrigger = focusTrigger
         }
 
+        if isFocused.wrappedValue && !wasFocused {
+            shouldSelectAll = true
+        }
+
         if isFocused.wrappedValue {
             context.coordinator.pendingResign = false
             if !isFirstResponder || shouldSelectAll {
-                let selectAll = shouldSelectAll
-                DispatchQueue.main.async {
-                    if nsView.window?.firstResponder !== nsView.currentEditor() {
-                        nsView.window?.makeFirstResponder(nsView)
-                    }
-                    if selectAll {
-                        nsView.currentEditor()?.selectAll(nil)
-                    }
-                }
+                context.coordinator.requestFocus(selectAll: shouldSelectAll)
             }
         } else {
             if context.coordinator.lastFocusValue {
@@ -1116,10 +1115,53 @@ private struct MacAddressTextField: NSViewRepresentable {
         var lastFocusValue = false
         var pendingResign = false
         var lastFocusTrigger: Int
+        weak var textField: NSTextField?
+        private var pendingFocusRetry = false
+        private var pendingSelectAll = false
 
         init(parent: MacAddressTextField) {
             self.parent = parent
             self.lastFocusTrigger = parent.focusTrigger
+        }
+
+        func requestFocus(selectAll: Bool) {
+            guard let textField else {
+                scheduleFocusRetry(selectAll: selectAll)
+                return
+            }
+
+            guard let window = textField.window else {
+                scheduleFocusRetry(selectAll: selectAll)
+                return
+            }
+
+            if window.firstResponder !== textField.currentEditor() {
+                window.makeFirstResponder(textField)
+            }
+
+            let shouldSelectAll = selectAll || pendingSelectAll
+            pendingSelectAll = false
+
+            if shouldSelectAll {
+                DispatchQueue.main.async {
+                    if let editor = textField.currentEditor() {
+                        editor.selectAll(nil)
+                    } else {
+                        textField.selectText(nil)
+                    }
+                }
+            }
+        }
+
+        private func scheduleFocusRetry(selectAll: Bool) {
+            pendingSelectAll = pendingSelectAll || selectAll
+            guard !pendingFocusRetry else { return }
+            pendingFocusRetry = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pendingFocusRetry = false
+                self.requestFocus(selectAll: false)
+            }
         }
 
         func controlTextDidBeginEditing(_ obj: Notification) {
