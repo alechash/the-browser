@@ -573,12 +573,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
     func submitAddress() {
         guard let id = selectedTabID,
               let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-        if acceptHighlightedAddressSuggestion() {
-            return
-        }
 
         let input = tabs[index].addressBarText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
+
+        if acceptAddressSuggestion(matching: input) {
+            return
+        }
 
         let targetURL: URL
         if let url = BrowserViewModel.url(from: input) {
@@ -1431,20 +1432,27 @@ final class BrowserViewModel: NSObject, ObservableObject {
         highlightedAddressSuggestionID = nil
     }
 
-    @discardableResult
-    private func acceptHighlightedAddressSuggestion() -> Bool {
-        let suggestion: HistoryEntry?
+    private func acceptAddressSuggestion(matching input: String) -> Bool {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
 
         if let highlightedID = highlightedAddressSuggestionID,
            let highlighted = addressSuggestions.first(where: { $0.id == highlightedID }) {
-            suggestion = highlighted
-        } else {
-            suggestion = addressSuggestions.first
+            selectAddressSuggestion(highlighted)
+            return true
         }
 
-        guard let suggestion else { return false }
+        guard BrowserViewModel.url(from: trimmed) != nil else { return false }
+        guard let topSuggestion = addressSuggestions.first else { return false }
 
-        selectAddressSuggestion(suggestion)
+        let loweredInput = trimmed.lowercased()
+        let matchesTopSuggestion =
+            topSuggestion.displayURL.lowercased().hasPrefix(loweredInput) ||
+            topSuggestion.displayTitle.lowercased().hasPrefix(loweredInput)
+
+        guard matchesTopSuggestion else { return false }
+
+        selectAddressSuggestion(topSuggestion)
         return true
     }
 
