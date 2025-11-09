@@ -104,6 +104,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
         let id: UUID
         var name: String
+        var iconName: String
         var createdAt: Date
         var pinnedTabs: [PinnedTab]
         var notes: [Note]
@@ -157,6 +158,21 @@ final class BrowserViewModel: NSObject, ObservableObject {
             updateSidebarAppearanceForSelection()
             persistSessionIfNeeded()
             clearAddressSuggestions()
+            if selectedTabID != nil {
+                selectedSpaceID = nil
+            }
+        }
+    }
+    @Published var selectedSpaceID: UUID? {
+        didSet {
+            if selectedSpaceID != nil {
+                if selectedTabID != nil {
+                    selectedTabID = nil
+                } else {
+                    updateSidebarAppearanceForSelection()
+                }
+                sidebarAppearance = .default
+            }
         }
     }
     @Published var sidebarAppearance: BrowserSidebarAppearance
@@ -223,9 +239,26 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     var activeWebViewTabIDs: [UUID] {
+        guard selectedSpaceID == nil else { return [] }
         let identifiers = computeActiveWebViewTabIDs()
         ensureSplitFractions(for: identifiers)
         return identifiers
+    }
+
+    var currentSpaceID: UUID? {
+        selectedSpaceID
+    }
+
+    func faviconURL(for tab: TabState) -> URL? {
+        guard tab.kind == .web else { return nil }
+        guard let targetURL = resolvedURL(for: tab.id, tab: tab) ?? tab.currentURL else {
+            return nil
+        }
+        guard let host = targetURL.host else { return nil }
+
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let encodedHost = host.addingPercentEncoding(withAllowedCharacters: allowed) ?? host
+        return URL(string: "https://www.google.com/s2/favicons?domain=\(encodedHost)&sz=64")
     }
 
     private let settings: BrowserSettings
@@ -282,6 +315,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
             Space(
                 id: UUID(),
                 name: "Creative Corner",
+                iconName: "folder",
                 createdAt: Date(),
                 pinnedTabs: [],
                 notes: [
@@ -291,6 +325,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
                 images: []
             )
         ]
+        self.selectedSpaceID = nil
 
         super.init()
         restorePreviousSessionIfNeeded()
@@ -360,6 +395,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let space = Space(
             id: UUID(),
             name: name,
+            iconName: "folder",
             createdAt: Date(),
             pinnedTabs: [],
             notes: [],
@@ -367,11 +403,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
             images: []
         )
         spaces.insert(space, at: 0)
+        selectedSpaceID = space.id
     }
 
     func deleteSpace(_ id: UUID) {
         if let index = spaces.firstIndex(where: { $0.id == id }) {
             spaces.remove(at: index)
+        }
+        if selectedSpaceID == id {
+            selectedSpaceID = nil
         }
     }
 
@@ -380,6 +420,22 @@ final class BrowserViewModel: NSObject, ObservableObject {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             space.name = trimmed.isEmpty ? space.name : trimmed
         }
+    }
+
+    func updateSpaceIcon(_ id: UUID, to iconName: String) {
+        updateSpace(id) { space in
+            let trimmed = iconName.trimmingCharacters(in: .whitespacesAndNewlines)
+            space.iconName = trimmed.isEmpty ? "folder" : trimmed
+        }
+    }
+
+    func selectSpace(_ id: UUID) {
+        guard spaces.contains(where: { $0.id == id }) else { return }
+        selectedSpaceID = id
+    }
+
+    func isSpaceSelected(_ id: UUID) -> Bool {
+        selectedSpaceID == id
     }
 
     func pinCurrentTab(in spaceID: UUID) {

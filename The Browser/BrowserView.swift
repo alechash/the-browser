@@ -26,7 +26,9 @@ struct BrowserView: View {
         let currentTabKind = viewModel.currentTabKind
         ZStack(alignment: .leading) {
             Group {
-                if currentTabKind == .history {
+                if let spaceID = viewModel.currentSpaceID {
+                    SpaceWorkspaceView(viewModel: viewModel, spaceID: spaceID, appearance: viewModel.sidebarAppearance)
+                } else if currentTabKind == .history {
                     HistoryView(viewModel: viewModel)
                 } else if activeWebTabs.isEmpty {
                     DefaultHomeView(
@@ -319,7 +321,6 @@ private struct BrowserSidebar: View {
     let enterFullscreen: () -> Void
     @State private var addressFieldWidth: CGFloat = 0
     @State private var addressFieldHeight: CGFloat = 0
-    @State private var activeSpaceSheet: SpaceSheetInfo?
 #if os(macOS)
     let addressFieldController: AddressFieldController
     @State private var isInteractingWithAddressSuggestions = false
@@ -706,9 +707,6 @@ private struct BrowserSidebar: View {
             spacesSection
             tabsSection
         }
-        .sheet(item: $activeSpaceSheet) { info in
-            SpaceDetailView(viewModel: viewModel, spaceID: info.id, appearance: appearance)
-        }
     }
 
     private var spacesSection: some View {
@@ -741,8 +739,9 @@ private struct BrowserSidebar: View {
                     ForEach(viewModel.spaces) { space in
                         SpaceRow(
                             space: space,
+                            isSelected: viewModel.isSpaceSelected(space.id),
                             appearance: appearance,
-                            openAction: { activeSpaceSheet = SpaceSheetInfo(id: space.id) },
+                            selectAction: { viewModel.selectSpace(space.id) },
                             pinAction: { viewModel.pinCurrentTab(in: space.id) },
                             deleteAction: { viewModel.deleteSpace(space.id) }
                         )
@@ -792,6 +791,7 @@ private struct BrowserSidebar: View {
                             appearance: appearance,
                             selectAction: { viewModel.selectTab(tab.id) },
                             closeAction: { viewModel.closeTab(tab.id) },
+                            faviconURL: viewModel.faviconURL(for: tab),
                             isInSplitView: viewModel.isTabInSplitView(tab.id),
                             canShowInSplitView: viewModel.canShowTabInSplitView(tab.id),
                             toggleSplitAction: { viewModel.toggleSplitView(for: tab.id) },
@@ -807,6 +807,7 @@ private struct BrowserSidebar: View {
                             appearance: appearance,
                             selectAction: { viewModel.selectTab(tab.id) },
                             closeAction: { viewModel.closeTab(tab.id) },
+                            faviconURL: viewModel.faviconURL(for: tab),
                             isInSplitView: viewModel.isTabInSplitView(tab.id),
                             canShowInSplitView: viewModel.canShowTabInSplitView(tab.id),
                             toggleSplitAction: { viewModel.toggleSplitView(for: tab.id) },
@@ -837,26 +838,23 @@ private struct BrowserSidebar: View {
     }
 }
 
-private struct SpaceSheetInfo: Identifiable {
-    let id: UUID
-}
-
 private struct SpaceRow: View {
     let space: BrowserViewModel.Space
+    let isSelected: Bool
     let appearance: BrowserSidebarAppearance
-    let openAction: () -> Void
+    let selectAction: () -> Void
     let pinAction: () -> Void
     let deleteAction: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "folder")
+            Image(systemName: resolvedIconName)
                 .font(.system(size: 20, weight: .semibold))
                 .frame(width: 32, height: 32)
                 .foregroundStyle(appearance.primary)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(appearance.controlTint.opacity(0.9))
+                        .fill(appearance.controlTint.opacity(isSelected ? 1 : 0.9))
                 )
 
             VStack(alignment: .leading, spacing: 4) {
@@ -902,9 +900,14 @@ private struct SpaceRow: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .liquidGlassBackground(tint: appearance.controlTint.opacity(0.72), cornerRadius: 16, includeShadow: false)
+        .liquidGlassBackground(tint: appearance.controlTint.opacity(isSelected ? 0.95 : 0.72), cornerRadius: 16, includeShadow: false)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .onTapGesture(perform: openAction)
+        .opacity(isSelected ? 1 : 0.92)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(appearance.primary.opacity(isSelected ? 0.4 : 0), lineWidth: 1.5)
+        )
+        .onTapGesture(perform: selectAction)
     }
 
     private var summaryText: String {
@@ -926,13 +929,17 @@ private struct SpaceRow: View {
         }
         return parts.joined(separator: " • ")
     }
+
+    private var resolvedIconName: String {
+        let trimmed = space.iconName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "folder" : trimmed
+    }
 }
 
-private struct SpaceDetailView: View {
+private struct SpaceWorkspaceView: View {
     @ObservedObject var viewModel: BrowserViewModel
     let spaceID: UUID
     let appearance: BrowserSidebarAppearance
-    @Environment(\.dismiss) private var dismiss
     @State private var noteDraft: String = ""
     @State private var linkTitle: String = ""
     @State private var linkURL: String = ""
@@ -940,41 +947,62 @@ private struct SpaceDetailView: View {
     @State private var imageCaption: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            header
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    pinnedTabsSection
-                    notesSection
-                    linksSection
-                    imagesSection
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 32) {
+                header
+                pinnedTabsSection
+                notesSection
+                linksSection
+                imagesSection
             }
+            .frame(maxWidth: 760)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 40)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
-        .padding(24)
-        .frame(minWidth: 460, minHeight: 560)
         .background(Color.browserBackground)
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             if let space = viewModel.space(with: spaceID) {
-                TextField(
-                    "Space Name",
-                    text: Binding(
-                        get: { space.name },
-                        set: { viewModel.renameSpace(spaceID, to: $0) }
-                    )
-                )
-                .font(.title2.weight(.semibold))
-                .textFieldStyle(.plain)
-                .foregroundStyle(appearance.primary)
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .center, spacing: 18) {
+                        iconPicker(for: space)
 
-                Text("Created \(formatted(date: space.createdAt))")
-                    .font(.caption)
-                    .foregroundStyle(appearance.secondary)
+                        VStack(alignment: .leading, spacing: 10) {
+                            TextField(
+                                "Space Name",
+                                text: Binding(
+                                    get: { space.name },
+                                    set: { viewModel.renameSpace(spaceID, to: $0) }
+                                )
+                            )
+                            .font(.largeTitle.weight(.semibold))
+                            .textFieldStyle(.plain)
+                            .foregroundStyle(appearance.primary)
+
+                            Text("Created \(formatted(date: space.createdAt))")
+                                .font(.caption)
+                                .foregroundStyle(appearance.secondary)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Icon (SF Symbol)")
+                            .font(.caption)
+                            .foregroundStyle(appearance.secondary)
+
+                        TextField(
+                            "folder",
+                            text: Binding(
+                                get: { space.iconName },
+                                set: { viewModel.updateSpaceIcon(spaceID, to: $0) }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
+                    }
+                }
             } else {
                 Text("Space Unavailable")
                     .font(.title2.weight(.semibold))
@@ -985,7 +1013,6 @@ private struct SpaceDetailView: View {
                 Spacer()
                 Button(role: .destructive) {
                     viewModel.deleteSpace(spaceID)
-                    dismiss()
                 } label: {
                     Label("Delete Space", systemImage: "trash")
                         .font(.subheadline.weight(.semibold))
@@ -993,6 +1020,64 @@ private struct SpaceDetailView: View {
                 .buttonStyle(.bordered)
             }
         }
+    }
+
+    @ViewBuilder
+    private func iconPicker(for space: BrowserViewModel.Space) -> some View {
+        let iconName = resolvedIconName(space.iconName)
+        Menu {
+            ForEach(iconChoices, id: \.self) { option in
+                Button {
+                    viewModel.updateSpaceIcon(spaceID, to: option)
+                } label: {
+                    Label(iconDisplayName(for: option), systemImage: option)
+                }
+            }
+        } label: {
+            Image(systemName: iconName)
+                .font(.system(size: 28, weight: .semibold))
+                .frame(width: 64, height: 64)
+                .foregroundStyle(appearance.primary)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(appearance.controlTint.opacity(0.95))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(appearance.primary.opacity(0.2), lineWidth: 1)
+                )
+        }
+        .menuStyle(.borderlessButton)
+#if os(macOS)
+        .help("Choose Icon")
+#endif
+    }
+
+    private var iconChoices: [String] {
+        [
+            "folder",
+            "sparkles",
+            "lightbulb",
+            "paintpalette",
+            "bookmark",
+            "camera",
+            "music.note",
+            "leaf",
+            "heart",
+            "globe",
+            "brain.head.profile"
+        ]
+    }
+
+    private func iconDisplayName(for symbol: String) -> String {
+        symbol.replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .capitalized
+    }
+
+    private func resolvedIconName(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "folder" : trimmed
     }
 
     private var pinnedTabsSection: some View {
@@ -1361,6 +1446,7 @@ private struct TabRow: View {
     let appearance: BrowserSidebarAppearance
     let selectAction: () -> Void
     let closeAction: () -> Void
+    let faviconURL: URL?
     let isInSplitView: Bool
     let canShowInSplitView: Bool
     let toggleSplitAction: () -> Void
@@ -1432,6 +1518,9 @@ private struct TabRow: View {
                     .help(isPoppedOut ? "Return to Main Window" : "Pop Out")
 #endif
 
+#if os(macOS)
+                    FaviconCloseButton(faviconURL: faviconURL, appearance: appearance, closeAction: closeAction)
+#else
                     Button(action: closeAction) {
                         Image(systemName: "xmark")
                             .font(.system(size: 10, weight: .bold))
@@ -1440,6 +1529,7 @@ private struct TabRow: View {
                     }
                     .buttonStyle(.plain)
                     .opacity(0.7)
+#endif
                 }
             }
         }
@@ -1465,6 +1555,66 @@ private struct TabRow: View {
         }
     }
 }
+
+#if os(macOS)
+private struct FaviconCloseButton: View {
+    let faviconURL: URL?
+    let appearance: BrowserSidebarAppearance
+    let closeAction: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: closeAction) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(appearance.controlTint.opacity(isHovering ? 0.9 : 0.75))
+
+                faviconContent
+                    .frame(width: 18, height: 18)
+            }
+            .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovering = hovering
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var faviconContent: some View {
+        if isHovering || faviconURL == nil {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(appearance.primary)
+        } else {
+            AsyncImage(url: faviconURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                case .empty, .failure:
+                    fallbackIcon()
+                @unknown default:
+                    fallbackIcon()
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private func fallbackIcon() -> some View {
+        Image(systemName: "globe")
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(appearance.primary)
+            .padding(2)
+    }
+}
+#endif
 
 private struct DownloadRow: View {
     let download: BrowserViewModel.DownloadItem
