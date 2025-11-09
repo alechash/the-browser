@@ -78,94 +78,14 @@ struct DefaultHomeView: View {
     }
 
     private var searchSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Search with \(settings.defaultSearchEngine.displayName)")
-                .font(.headline)
-                .foregroundStyle(Color.white.opacity(0.85))
-
-            HStack(spacing: 18) {
-                Image(systemName: "magnifyingglass")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(0.65))
-
-                TextField("Search the open web", text: $searchQuery)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(Color.white)
-                    .disableAutocorrection(true)
-                    .textInputAutocapitalization(.never)
-                    .focused($isSearchFieldFocused)
-                    .submitLabel(.search)
-                    .onSubmit(submitSearch)
-
-                Button(action: submitSearch) {
-                    Label("Go", systemImage: "arrow.up.right.circle.fill")
-                        .labelStyle(.iconOnly)
-                        .font(.system(size: 30, weight: .semibold, design: .rounded))
-                }
-                .buttonStyle(.plain)
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(Color.browserAccent, Color.white)
-                .disabled(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .opacity(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 22)
-            .background(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(Color.white.opacity(0.07))
-                    .background(
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .fill(Color.white.opacity(0.03))
-                            .blur(radius: 30)
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(Color.white.opacity(isSearchFieldFocused ? 0.4 : 0.16), lineWidth: 1.2)
-            )
-
-            if !trendingSearches.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Trending inspirations")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.white.opacity(0.7))
-
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], alignment: .leading, spacing: 12) {
-                        ForEach(trendingSearches, id: \.self) { suggestion in
-                            Button {
-                                onSubmitSearch(suggestion)
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "sparkles")
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(Color.browserAccent)
-                                    Text(suggestion)
-                                        .font(.footnote.weight(.medium))
-                                        .foregroundStyle(Color.white)
-                                        .multilineTextAlignment(.leading)
-                                }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(Color.white.opacity(0.08))
-                                )
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .transition(.opacity)
-            }
-        }
-        .padding(32)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .liquidGlassBackground(tint: Color.blue.opacity(0.18), cornerRadius: 36)
+        SearchSectionCard(
+            engineName: settings.defaultSearchEngine.displayName,
+            searchQuery: $searchQuery,
+            isSearchFieldFocused: $isSearchFieldFocused,
+            trendingSearches: trendingSearches,
+            submitSearch: submitSearch,
+            onSuggestion: onSubmitSearch
+        )
     }
 
     private var informationSection: some View {
@@ -578,6 +498,132 @@ struct DefaultHomeView: View {
         guard !trimmed.isEmpty else { return }
         onSubmitSearch(trimmed)
         searchQuery = ""
+    }
+}
+
+private struct SearchSectionCard: View {
+    let engineName: String
+    @Binding var searchQuery: String
+    let isSearchFieldFocused: FocusState<Bool>.Binding
+    let trendingSearches: [String]
+    let submitSearch: () -> Void
+    let onSuggestion: (String) -> Void
+
+    private var trimmedQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isFocused: Bool {
+        isSearchFieldFocused.wrappedValue
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            header
+            searchField
+
+            if !trendingSearches.isEmpty {
+                TrendingSuggestionsView(suggestions: trendingSearches, onSuggestion: onSuggestion)
+                    .transition(.opacity)
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .liquidGlassBackground(tint: Color.blue.opacity(0.18), cornerRadius: 36)
+    }
+
+    private var header: some View {
+        Text("Search with \(engineName)")
+            .font(.headline)
+            .foregroundStyle(Color.white.opacity(0.85))
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 18) {
+            Image(systemName: "magnifyingglass")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Color.white.opacity(0.65))
+
+            TextField("Search the open web", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .foregroundStyle(Color.white)
+                .disableAutocorrection(true)
+                .textInputAutocapitalization(.never)
+                .focused(isSearchFieldFocused)
+                .submitLabel(.search)
+                .onSubmit(submitSearch)
+
+            Button(action: submitSearch) {
+                Label("Go", systemImage: "arrow.up.right.circle.fill")
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+            }
+            .buttonStyle(.plain)
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(Color.browserAccent, Color.white)
+            .disabled(trimmedQuery.isEmpty)
+            .opacity(trimmedQuery.isEmpty ? 0.4 : 1)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color.white.opacity(0.07))
+                .background(
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .fill(Color.white.opacity(0.03))
+                        .blur(radius: 30)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.white.opacity(isFocused ? 0.4 : 0.16), lineWidth: 1.2)
+        )
+    }
+}
+
+private struct TrendingSuggestionsView: View {
+    let suggestions: [String]
+    let onSuggestion: (String) -> Void
+
+    private let columns = [GridItem(.adaptive(minimum: 180), spacing: 12)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Trending inspirations")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.white.opacity(0.7))
+
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button {
+                        onSuggestion(suggestion)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "sparkles")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(Color.browserAccent)
+                            Text(suggestion)
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(Color.white)
+                                .multilineTextAlignment(.leading)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(0.08))
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 }
 
