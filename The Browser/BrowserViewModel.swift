@@ -112,6 +112,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published private(set) var history: [HistoryEntry]
     @Published private(set) var addressSuggestions: [HistoryEntry]
     @Published private(set) var isShowingAddressSuggestions: Bool
+    @Published private(set) var highlightedAddressSuggestionID: UUID?
 
     var shouldShowProgress: Bool {
         guard let tab = currentTab, tab.kind == .web else { return false }
@@ -208,6 +209,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.history = BrowserViewModel.loadHistory(from: userDefaults)
         self.addressSuggestions = []
         self.isShowingAddressSuggestions = false
+        self.highlightedAddressSuggestionID = nil
         super.init()
         restorePreviousSessionIfNeeded()
     }
@@ -510,12 +512,17 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard let id = selectedTabID,
               let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs[index].addressBarText = text
+        highlightedAddressSuggestionID = nil
         updateAddressSuggestions(for: text)
     }
 
     func submitAddress() {
         guard let id = selectedTabID,
               let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if acceptHighlightedAddressSuggestion() {
+            return
+        }
+
         let input = tabs[index].addressBarText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
 
@@ -613,6 +620,28 @@ final class BrowserViewModel: NSObject, ObservableObject {
         tabs[index].addressBarText = entry.url.absoluteString
         clearAddressSuggestions()
         load(url: entry.url, in: id)
+    }
+
+    func highlightNextAddressSuggestion() {
+        moveHighlightedAddressSuggestion(by: 1)
+    }
+
+    func highlightPreviousAddressSuggestion() {
+        moveHighlightedAddressSuggestion(by: -1)
+    }
+
+    func setHighlightedAddressSuggestion(_ entry: HistoryEntry?) {
+        guard let entry else {
+            highlightedAddressSuggestionID = nil
+            return
+        }
+
+        guard addressSuggestions.contains(entry) else { return }
+        highlightedAddressSuggestionID = entry.id
+    }
+
+    func dismissAddressSuggestions() {
+        clearAddressSuggestions()
     }
 
     func openInspector() {
@@ -1277,6 +1306,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard isAddressFieldFocused else {
             isShowingAddressSuggestions = false
             addressSuggestions = []
+            highlightedAddressSuggestionID = nil
             return
         }
 
@@ -1299,13 +1329,49 @@ final class BrowserViewModel: NSObject, ObservableObject {
             }
         }
 
-        addressSuggestions = Array(suggestions.prefix(8))
+        let newSuggestions = Array(suggestions.prefix(8))
+        addressSuggestions = newSuggestions
         isShowingAddressSuggestions = !addressSuggestions.isEmpty
+
+        if let highlightedID = highlightedAddressSuggestionID,
+           newSuggestions.contains(where: { $0.id == highlightedID }) {
+            return
+        }
+
+        highlightedAddressSuggestionID = nil
     }
 
     private func clearAddressSuggestions() {
         addressSuggestions = []
         isShowingAddressSuggestions = false
+        highlightedAddressSuggestionID = nil
+    }
+
+    @discardableResult
+    private func acceptHighlightedAddressSuggestion() -> Bool {
+        guard let highlightedID = highlightedAddressSuggestionID,
+              let suggestion = addressSuggestions.first(where: { $0.id == highlightedID }) else { return false }
+
+        selectAddressSuggestion(suggestion)
+        return true
+    }
+
+    private func moveHighlightedAddressSuggestion(by offset: Int) {
+        guard !addressSuggestions.isEmpty else {
+            highlightedAddressSuggestionID = nil
+            return
+        }
+
+        let currentIndex = addressSuggestions.firstIndex { $0.id == highlightedAddressSuggestionID }
+        let newIndex: Int
+
+        if let currentIndex {
+            newIndex = (currentIndex + offset + addressSuggestions.count) % addressSuggestions.count
+        } else {
+            newIndex = offset > 0 ? 0 : addressSuggestions.count - 1
+        }
+
+        highlightedAddressSuggestionID = addressSuggestions[newIndex].id
     }
 
     private func recordHistoryVisit(url: URL, title: String?) {

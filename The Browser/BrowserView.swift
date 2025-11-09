@@ -9,6 +9,7 @@ struct BrowserView: View {
     @FocusState private var isAddressFocused: Bool
     @State private var isShowingSettings = false
     @State private var isWebContentFullscreen = false
+    @State private var addressFieldWidth: CGFloat = 0
 
     private let sidebarWidth: CGFloat = 288
 
@@ -268,6 +269,14 @@ private final class NonDraggableNSView: NSView {
 }
 #endif
 
+private struct AddressFieldWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private struct BrowserSidebar: View {
     @ObservedObject var viewModel: BrowserViewModel
     let appearance: BrowserSidebarAppearance
@@ -424,13 +433,44 @@ private struct BrowserSidebar: View {
                 .font(.caption)
                 .foregroundStyle(appearance.secondary)
 
-            TextField(
-                "Search or enter website name",
-                text: Binding(
-                    get: { viewModel.currentAddressText },
-                    set: { viewModel.updateAddressText($0) }
-                )
-            )
+            addressTextInput
+#if os(iOS)
+            if viewModel.isShowingAddressSuggestions {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(viewModel.addressSuggestions) { suggestion in
+                        Button {
+                            viewModel.selectAddressSuggestion(suggestion)
+                            isAddressFocused.wrappedValue = false
+                        } label: {
+                            suggestionRow(for: suggestion, isHighlighted: false)
+                        }
+                        .buttonStyle(.plain)
+
+                        if suggestion.id != viewModel.addressSuggestions.last?.id {
+                            Rectangle()
+                                .fill(appearance.primary.opacity(0.1))
+                                .frame(height: 1)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+                .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+#endif
+        }
+        .onPreferenceChange(AddressFieldWidthPreferenceKey.self) { width in
+            addressFieldWidth = width
+        }
+    }
+
+    private var addressTextInput: some View {
+        let textBinding = Binding(
+            get: { viewModel.currentAddressText },
+            set: { viewModel.updateAddressText($0) }
+        )
+
+        return TextField("Search or enter website name", text: textBinding)
             .focused(isAddressFocused)
             .textFieldStyle(.plain)
             .foregroundColor(appearance.primary)
@@ -448,6 +488,11 @@ private struct BrowserSidebar: View {
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
             }
+            .background(
+                GeometryReader { geometry in
+                    Color.clear.preference(key: AddressFieldWidthPreferenceKey.self, value: geometry.size.width)
+                }
+            )
             .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
             .tint(appearance.primary)
             .onChange(of: isAddressFocused.wrappedValue) { focused in
@@ -462,34 +507,75 @@ private struct BrowserSidebar: View {
             .keyboardType(.URL)
             .disableAutocorrection(true)
             .submitLabel(.go)
-#endif
-
-            if viewModel.isShowingAddressSuggestions {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(viewModel.addressSuggestions) { suggestion in
-                        Button {
-                            viewModel.selectAddressSuggestion(suggestion)
-                            isAddressFocused.wrappedValue = false
-                        } label: {
-                            suggestionRow(for: suggestion)
-                        }
-                        .buttonStyle(.plain)
-
-                        if suggestion.id != viewModel.addressSuggestions.last?.id {
-                            Rectangle()
-                                .fill(appearance.primary.opacity(0.1))
-                                .frame(height: 1)
+#else
+            .onMoveCommand { direction in
+                switch direction {
+                case .down:
+                    viewModel.highlightNextAddressSuggestion()
+                case .up:
+                    viewModel.highlightPreviousAddressSuggestion()
+                default:
+                    break
+                }
+            }
+            .onExitCommand {
+                viewModel.dismissAddressSuggestions()
+            }
+            .popover(
+                isPresented: Binding(
+                    get: { viewModel.isShowingAddressSuggestions },
+                    set: { isPresented in
+                        if !isPresented {
+                            viewModel.dismissAddressSuggestions()
                         }
                     }
-                }
-                .padding(.top, 2)
-                .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                ),
+                attachmentAnchor: .rect(.bounds),
+                arrowEdge: .bottom
+            ) {
+                addressSuggestionsPopover
+                    .frame(width: max(addressFieldWidth, 220))
             }
-        }
+#endif
     }
 
-    private func suggestionRow(for suggestion: BrowserViewModel.HistoryEntry) -> some View {
+    private var addressSuggestionsPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(viewModel.addressSuggestions) { suggestion in
+                Button {
+                    viewModel.selectAddressSuggestion(suggestion)
+                    isAddressFocused.wrappedValue = false
+                } label: {
+                    suggestionRow(
+                        for: suggestion,
+                        isHighlighted: viewModel.highlightedAddressSuggestionID == suggestion.id
+                    )
+                }
+                .buttonStyle(.plain)
+#if os(macOS)
+                .onHover { hovering in
+                    if hovering {
+                        viewModel.setHighlightedAddressSuggestion(suggestion)
+                    }
+                }
+#endif
+
+                if suggestion.id != viewModel.addressSuggestions.last?.id {
+                    Rectangle()
+                        .fill(appearance.primary.opacity(0.1))
+                        .frame(height: 1)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func suggestionRow(
+        for suggestion: BrowserViewModel.HistoryEntry,
+        isHighlighted: Bool
+    ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(suggestion.displayTitle)
                 .font(.subheadline)
@@ -505,6 +591,10 @@ private struct BrowserSidebar: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(appearance.primary.opacity(isHighlighted ? 0.12 : 0))
+        )
         .contentShape(Rectangle())
     }
 
