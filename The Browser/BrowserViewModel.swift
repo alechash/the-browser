@@ -686,11 +686,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
         load(url: entry.url)
     }
 
-    func highlightNextAddressSuggestion() {
+    @discardableResult
+    func highlightNextAddressSuggestion() -> Bool {
         moveHighlightedAddressSuggestion(by: 1)
     }
 
-    func highlightPreviousAddressSuggestion() {
+    @discardableResult
+    func highlightPreviousAddressSuggestion() -> Bool {
         moveHighlightedAddressSuggestion(by: -1)
     }
 
@@ -1445,10 +1447,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
         return true
     }
 
-    private func moveHighlightedAddressSuggestion(by offset: Int) {
+    @discardableResult
+    private func moveHighlightedAddressSuggestion(by offset: Int) -> Bool {
         guard !addressSuggestions.isEmpty else {
             highlightedAddressSuggestionID = nil
-            return
+            return false
         }
 
         let currentIndex = addressSuggestions.firstIndex { $0.id == highlightedAddressSuggestionID }
@@ -1461,6 +1464,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
 
         highlightedAddressSuggestionID = addressSuggestions[newIndex].id
+        return true
     }
 
     private func recordHistoryVisit(url: URL, title: String?) {

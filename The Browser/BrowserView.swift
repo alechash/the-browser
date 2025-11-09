@@ -486,15 +486,60 @@ private struct BrowserSidebar: View {
         max(addressFieldHeight, 44) + 6
     }
 
+    private func handleAddressFocusChange(_ focused: Bool) {
+#if os(macOS)
+        if !focused {
+            DispatchQueue.main.async {
+                if isInteractingWithAddressSuggestions && viewModel.isShowingAddressSuggestions {
+                    isAddressFocused.wrappedValue = true
+                } else {
+                    viewModel.setAddressFieldFocus(false)
+                }
+            }
+            return
+        }
+#endif
+        viewModel.setAddressFieldFocus(focused)
+    }
+
     private var addressTextInput: some View {
         let textBinding = Binding(
             get: { viewModel.currentAddressText },
             set: { viewModel.updateAddressText($0) }
         )
 
-        return TextField("Search or enter website name", text: textBinding)
+#if os(iOS)
+        let field = TextField("Search or enter website name", text: textBinding)
             .focused(isAddressFocused)
             .textFieldStyle(.plain)
+            .onChange(of: isAddressFocused.wrappedValue) { focused in
+                handleAddressFocusChange(focused)
+            }
+            .onSubmit {
+                viewModel.submitAddress()
+                isAddressFocused.wrappedValue = false
+            }
+            .textInputAutocapitalization(.never)
+            .keyboardType(.URL)
+            .disableAutocorrection(true)
+            .submitLabel(.go)
+#else
+        let field = MacAddressTextField(
+            text: textBinding,
+            isFocused: isAddressFocused,
+            placeholder: "Search or enter website name",
+            onSubmit: {
+                viewModel.submitAddress()
+                isAddressFocused.wrappedValue = false
+            },
+            onArrowDown: { viewModel.highlightNextAddressSuggestion() },
+            onArrowUp: { viewModel.highlightPreviousAddressSuggestion() },
+            onCancel: viewModel.dismissAddressSuggestions,
+            onFocusChange: handleAddressFocusChange
+        )
+#endif
+
+        return field
             .foregroundColor(appearance.primary)
             .padding(.vertical, 12)
             .padding(.horizontal, 14)
@@ -519,45 +564,6 @@ private struct BrowserSidebar: View {
             )
             .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
             .tint(appearance.primary)
-            .onChange(of: isAddressFocused.wrappedValue) { focused in
-#if os(macOS)
-                if !focused {
-                    DispatchQueue.main.async {
-                        if isInteractingWithAddressSuggestions && viewModel.isShowingAddressSuggestions {
-                            isAddressFocused.wrappedValue = true
-                        } else {
-                            viewModel.setAddressFieldFocus(false)
-                        }
-                    }
-                    return
-                }
-#endif
-                viewModel.setAddressFieldFocus(focused)
-            }
-            .onSubmit {
-                viewModel.submitAddress()
-                isAddressFocused.wrappedValue = false
-            }
-#if os(iOS)
-            .textInputAutocapitalization(.never)
-            .keyboardType(.URL)
-            .disableAutocorrection(true)
-            .submitLabel(.go)
-#else
-            .onMoveCommand { direction in
-                switch direction {
-                case .down:
-                    viewModel.highlightNextAddressSuggestion()
-                case .up:
-                    viewModel.highlightPreviousAddressSuggestion()
-                default:
-                    break
-                }
-            }
-            .onExitCommand {
-                viewModel.dismissAddressSuggestions()
-            }
-#endif
     }
 
     private var addressSuggestionsList: some View {
@@ -1025,4 +1031,95 @@ private struct DownloadRow: View {
         }
     }
 }
+
+#if os(macOS)
+private struct MacAddressTextField: NSViewRepresentable {
+    @Binding var text: String
+    var isFocused: FocusState<Bool>.Binding
+    var placeholder: String
+    var onSubmit: () -> Void
+    var onArrowDown: () -> Bool
+    var onArrowUp: () -> Bool
+    var onCancel: () -> Void
+    var onFocusChange: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let textField = NSTextField()
+        textField.isBordered = false
+        textField.drawsBackground = false
+        textField.focusRingType = .none
+        textField.placeholderString = placeholder
+        textField.usesSingleLineMode = true
+        textField.maximumNumberOfLines = 1
+        textField.lineBreakMode = .byTruncatingTail
+        textField.delegate = context.coordinator
+        textField.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        textField.stringValue = text
+        return textField
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+
+        context.coordinator.parent = self
+
+        let isFirstResponder = nsView.window?.firstResponder === nsView.currentEditor
+        if isFocused.wrappedValue && !isFirstResponder {
+            nsView.window?.makeFirstResponder(nsView)
+        } else if !isFocused.wrappedValue && isFirstResponder {
+            nsView.window?.makeFirstResponder(nil)
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: MacAddressTextField
+
+        init(parent: MacAddressTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidBeginEditing(_ obj: Notification) {
+            parent.isFocused.wrappedValue = true
+            parent.onFocusChange(true)
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            parent.onFocusChange(false)
+            if parent.isFocused.wrappedValue {
+                parent.isFocused.wrappedValue = false
+            }
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let textField = obj.object as? NSTextField else { return }
+            if parent.text != textField.stringValue {
+                parent.text = textField.stringValue
+            }
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            switch commandSelector {
+            case #selector(NSResponder.moveDown(_:)):
+                return parent.onArrowDown()
+            case #selector(NSResponder.moveUp(_:)):
+                return parent.onArrowUp()
+            case #selector(NSResponder.insertNewline(_:)):
+                parent.onSubmit()
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.onCancel()
+                return true
+            default:
+                return false
+            }
+        }
+    }
+}
+#endif
 
