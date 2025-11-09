@@ -21,9 +21,12 @@ struct BrowserView: View {
 
     var body: some View {
         let activeWebTabs = viewModel.activeWebViewTabIDs
+        let currentTabKind = viewModel.currentTabKind
         ZStack(alignment: .leading) {
             Group {
-                if activeWebTabs.isEmpty {
+                if currentTabKind == .history {
+                    HistoryView(viewModel: viewModel)
+                } else if activeWebTabs.isEmpty {
                     DefaultHomeView(
                         settings: settings,
                         onSubmitSearch: { query in
@@ -34,6 +37,9 @@ struct BrowserView: View {
                         },
                         onOpenNewTab: {
                             viewModel.openNewTab()
+                        },
+                        onOpenHistory: {
+                            viewModel.openHistoryTab()
                         },
                         onOpenSettings: {
                             isShowingSettings = true
@@ -418,6 +424,14 @@ private struct BrowserSidebar: View {
             )
 
             NavigationControlButton(
+                symbol: "clock",
+                help: "History",
+                isEnabled: true,
+                appearance: appearance,
+                action: viewModel.openHistoryTab
+            )
+
+            NavigationControlButton(
                 symbol: "arrow.up.left.and.arrow.down.right",
                 help: "Enter Fullscreen",
                 isEnabled: viewModel.isCurrentTabDisplayingWebContent,
@@ -579,14 +593,14 @@ private struct BrowserSidebar: View {
 
                 if suggestion.id != viewModel.addressSuggestions.last?.id {
                     Rectangle()
-                        .fill(appearance.primary.opacity(0.1))
+                        .fill(appearance.primary.opacity(0.08))
                         .frame(height: 1)
                 }
             }
         }
-        .padding(.vertical, 4)
-        .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.vertical, 8)
+        .padding(.horizontal, 6)
+        .liquidGlassBackground(tint: appearance.controlTint.opacity(0.9), cornerRadius: 20)
     }
 
     private func suggestionRow(
@@ -610,9 +624,14 @@ private struct BrowserSidebar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(appearance.primary.opacity(isHighlighted ? 0.12 : 0))
+                .fill(
+                    appearance.primary.opacity(
+                        isHighlighted ? 0.18 : 0.06
+                    )
+                )
         )
-        .contentShape(Rectangle())
+        .padding(.horizontal, 2)
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var divider: some View {

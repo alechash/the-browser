@@ -13,6 +13,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     struct TabState: Identifiable, Equatable {
         enum Kind: Equatable {
             case nativeHome
+            case history
             case web
         }
 
@@ -68,11 +69,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let title: String
         let addressBarText: String
         let url: URL?
+        let kind: TabState.Kind
     }
 
     private struct PersistedTab: Codable {
         enum Kind: String, Codable {
             case nativeHome
+            case history
             case web
         }
 
@@ -157,6 +160,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     var isCurrentTabDisplayingWebContent: Bool {
         currentTab?.kind == .web
+    }
+
+    var currentTabKind: TabState.Kind? {
+        currentTab?.kind
     }
 
     var activeWebViewTabIDs: [UUID] {
@@ -291,6 +298,31 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     func openNewTab() {
         openNewTab(with: homeURL)
+    }
+
+    func openHistoryTab() {
+        clearAddressSuggestions()
+
+        if let existing = tabs.first(where: { $0.kind == .history }) {
+            selectedTabID = existing.id
+            return
+        }
+
+        let tabID = UUID()
+        let historyTab = TabState(
+            id: tabID,
+            title: defaultTitle(for: .history),
+            addressBarText: "",
+            canGoBack: false,
+            canGoForward: false,
+            isLoading: false,
+            progress: 0,
+            currentURL: nil,
+            kind: .history
+        )
+
+        tabs.append(historyTab)
+        selectedTabID = tabID
     }
 
     func openNewTab(with url: URL?) {
@@ -448,17 +480,34 @@ final class BrowserViewModel: NSObject, ObservableObject {
         guard let snapshot = closedTabHistory.popLast() else { return }
 
         let tabID = UUID()
-        let targetURL = snapshot.url ?? homeURL
-        let kind: TabState.Kind = targetURL == nil ? .nativeHome : .web
+        let resolvedKind: TabState.Kind
+        let targetURL: URL?
+
+        switch snapshot.kind {
+        case .web:
+            let candidateURL = snapshot.url ?? homeURL
+            resolvedKind = candidateURL == nil ? .nativeHome : .web
+            targetURL = candidateURL
+        case .history:
+            resolvedKind = .history
+            targetURL = nil
+        case .nativeHome:
+            resolvedKind = .nativeHome
+            targetURL = homeURL
+        }
+
         let addressText: String
-        if let url = targetURL {
-            addressText = snapshot.addressBarText.isEmpty ? url.absoluteString : snapshot.addressBarText
+        if resolvedKind == .web, let targetURL {
+            addressText = snapshot.addressBarText.isEmpty ? targetURL.absoluteString : snapshot.addressBarText
         } else {
             addressText = ""
         }
+
         let title: String
-        if snapshot.title.isEmpty {
-            title = defaultTitle(for: kind)
+        if resolvedKind == .history {
+            title = defaultTitle(for: .history)
+        } else if snapshot.title.isEmpty {
+            title = defaultTitle(for: resolvedKind)
         } else {
             title = snapshot.title
         }
@@ -472,12 +521,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
             isLoading: false,
             progress: 0,
             currentURL: targetURL,
-            kind: kind
+            kind: resolvedKind
         )
 
         tabs.append(restoredTab)
         selectedTabID = tabID
-        if let url = targetURL {
+        if let url = targetURL, resolvedKind == .web {
             pendingURLs[tabID] = url
             _ = makeConfiguredWebView(for: tabID)
             attemptToLoadPendingURL(for: tabID)
@@ -620,6 +669,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
         tabs[index].addressBarText = entry.url.absoluteString
         clearAddressSuggestions()
         load(url: entry.url, in: id)
+    }
+
+    func openHistoryEntry(_ entry: HistoryEntry, inNewTab: Bool = false) {
+        if inNewTab || selectedTabID == nil || currentTabKind == .history {
+            openNewTab(with: entry.url)
+            return
+        }
+
+        load(url: entry.url)
     }
 
     func highlightNextAddressSuggestion() {
@@ -854,6 +912,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         switch kind {
         case .nativeHome:
             return "Hello"
+        case .history:
+            return "History"
         case .web:
             return "New Tab"
         }
@@ -915,7 +975,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let snapshot = ClosedTabSnapshot(
             title: tab.title,
             addressBarText: tab.addressBarText,
-            url: url
+            url: url,
+            kind: tab.kind
         )
 
         closedTabHistory.append(snapshot)
@@ -944,7 +1005,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private func persistSession() {
         let persistedTabs = tabs.map { tab -> PersistedTab in
             let urlString = resolvedURL(for: tab.id, tab: tab)?.absoluteString
-            let persistedKind: PersistedTab.Kind = tab.kind == .web ? .web : .nativeHome
+            let persistedKind: PersistedTab.Kind
+            switch tab.kind {
+            case .web:
+                persistedKind = .web
+            case .history:
+                persistedKind = .history
+            case .nativeHome:
+                persistedKind = .nativeHome
+            }
             return PersistedTab(kind: persistedKind, url: urlString)
         }
 
@@ -986,10 +1055,17 @@ final class BrowserViewModel: NSObject, ObservableObject {
             let id = UUID()
             let url = persisted.url.flatMap { URL(string: $0) }
             let kind: TabState.Kind
-            if persisted.kind == .web, url == nil {
+            switch persisted.kind {
+            case .web:
+                if let url {
+                    kind = .web
+                } else {
+                    kind = .nativeHome
+                }
+            case .nativeHome:
                 kind = .nativeHome
-            } else {
-                kind = persisted.kind == .web ? .web : .nativeHome
+            case .history:
+                kind = .history
             }
             let addressText = url?.absoluteString ?? ""
 
