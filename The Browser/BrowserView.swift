@@ -27,6 +27,15 @@ struct BrowserView: View {
                         settings: settings,
                         onSubmitSearch: { query in
                             viewModel.performSearch(query)
+                        },
+                        onOpenURL: { url in
+                            viewModel.openNewTab(with: url)
+                        },
+                        onOpenNewTab: {
+                            viewModel.openNewTab()
+                        },
+                        onOpenSettings: {
+                            isShowingSettings = true
                         }
                     )
                 } else {
