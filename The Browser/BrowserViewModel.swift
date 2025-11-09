@@ -1433,8 +1433,16 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     @discardableResult
     private func acceptHighlightedAddressSuggestion() -> Bool {
-        guard let highlightedID = highlightedAddressSuggestionID,
-              let suggestion = addressSuggestions.first(where: { $0.id == highlightedID }) else { return false }
+        let suggestion: HistoryEntry?
+
+        if let highlightedID = highlightedAddressSuggestionID,
+           let highlighted = addressSuggestions.first(where: { $0.id == highlightedID }) {
+            suggestion = highlighted
+        } else {
+            suggestion = addressSuggestions.first
+        }
+
+        guard let suggestion else { return false }
 
         selectAddressSuggestion(suggestion)
         return true

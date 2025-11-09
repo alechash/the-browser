@@ -9,8 +9,6 @@ struct BrowserView: View {
     @FocusState private var isAddressFocused: Bool
     @State private var isShowingSettings = false
     @State private var isWebContentFullscreen = false
-    @State private var addressFieldWidth: CGFloat = 0
-
     private let sidebarWidth: CGFloat = 288
 
     init() {
@@ -283,6 +281,14 @@ private struct AddressFieldWidthPreferenceKey: PreferenceKey {
     }
 }
 
+private struct AddressFieldHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private struct BrowserSidebar: View {
     @ObservedObject var viewModel: BrowserViewModel
     let appearance: BrowserSidebarAppearance
@@ -290,6 +296,7 @@ private struct BrowserSidebar: View {
     @Binding var isShowingSettings: Bool
     let enterFullscreen: () -> Void
     @State private var addressFieldWidth: CGFloat = 0
+    @State private var addressFieldHeight: CGFloat = 0
 #if os(macOS)
     @State private var isInteractingWithAddressSuggestions = false
 #endif
@@ -316,6 +323,13 @@ private struct BrowserSidebar: View {
 
             HStack(spacing: 12) {
                 shareControl
+
+                iconControlButton(
+                    systemImage: "clock",
+                    help: "History",
+                    isEnabled: true,
+                    action: viewModel.openHistoryTab
+                )
 
                 iconControlButton(
                     systemImage: "ladybug",
@@ -428,14 +442,6 @@ private struct BrowserSidebar: View {
             )
 
             NavigationControlButton(
-                symbol: "clock",
-                help: "History",
-                isEnabled: true,
-                appearance: appearance,
-                action: viewModel.openHistoryTab
-            )
-
-            NavigationControlButton(
                 symbol: "arrow.up.left.and.arrow.down.right",
                 help: "Enter Fullscreen",
                 isEnabled: viewModel.isCurrentTabDisplayingWebContent,
@@ -451,35 +457,33 @@ private struct BrowserSidebar: View {
                 .font(.caption)
                 .foregroundStyle(appearance.secondary)
 
-            addressTextInput
-#if os(iOS)
-            if viewModel.isShowingAddressSuggestions {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(viewModel.addressSuggestions) { suggestion in
-                        Button {
-                            viewModel.selectAddressSuggestion(suggestion)
-                            isAddressFocused.wrappedValue = false
-                        } label: {
-                            suggestionRow(for: suggestion, isHighlighted: false)
-                        }
-                        .buttonStyle(.plain)
+            ZStack(alignment: .topLeading) {
+                addressTextInput
 
-                        if suggestion.id != viewModel.addressSuggestions.last?.id {
-                            Rectangle()
-                                .fill(appearance.primary.opacity(0.1))
-                                .frame(height: 1)
-                        }
+                if viewModel.isShowingAddressSuggestions {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Color.clear
+                            .frame(height: suggestionTopPadding)
+                            .allowsHitTesting(false)
+
+                        addressSuggestionsList
                     }
+                    .frame(width: max(addressFieldWidth, 220))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .zIndex(1)
                 }
-                .padding(.top, 2)
-                .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
-#endif
         }
         .onPreferenceChange(AddressFieldWidthPreferenceKey.self) { width in
             addressFieldWidth = width
         }
+        .onPreferenceChange(AddressFieldHeightPreferenceKey.self) { height in
+            addressFieldHeight = height
+        }
+    }
+
+    private var suggestionTopPadding: CGFloat {
+        max(addressFieldHeight, 44) + 6
     }
 
     private var addressTextInput: some View {
@@ -508,7 +512,9 @@ private struct BrowserSidebar: View {
             }
             .background(
                 GeometryReader { geometry in
-                    Color.clear.preference(key: AddressFieldWidthPreferenceKey.self, value: geometry.size.width)
+                    Color.clear
+                        .preference(key: AddressFieldWidthPreferenceKey.self, value: geometry.size.width)
+                        .preference(key: AddressFieldHeightPreferenceKey.self, value: geometry.size.height)
                 }
             )
             .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 16, includeShadow: false)
@@ -551,25 +557,10 @@ private struct BrowserSidebar: View {
             .onExitCommand {
                 viewModel.dismissAddressSuggestions()
             }
-            .popover(
-                isPresented: Binding(
-                    get: { viewModel.isShowingAddressSuggestions },
-                    set: { isPresented in
-                        if !isPresented {
-                            viewModel.dismissAddressSuggestions()
-                        }
-                    }
-                ),
-                attachmentAnchor: .rect(.bounds),
-                arrowEdge: .bottom
-            ) {
-                addressSuggestionsPopover
-                    .frame(width: max(addressFieldWidth, 220))
-            }
 #endif
     }
 
-    private var addressSuggestionsPopover: some View {
+    private var addressSuggestionsList: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(viewModel.addressSuggestions) { suggestion in
                 Button {
@@ -603,6 +594,7 @@ private struct BrowserSidebar: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 6)
         .liquidGlassBackground(tint: appearance.controlTint.opacity(0.9), cornerRadius: 20)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
 #if os(macOS)
         .onHover { hovering in
             isInteractingWithAddressSuggestions = hovering
