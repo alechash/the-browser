@@ -9,6 +9,10 @@ struct BrowserView: View {
     @FocusState private var isAddressFocused: Bool
     @State private var isShowingSettings = false
     @State private var isWebContentFullscreen = false
+#if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var isShowingSidebarOverlay = false
+#endif
 
     private let sidebarWidth: CGFloat = 288
 
@@ -19,62 +23,133 @@ struct BrowserView: View {
     }
 
     var body: some View {
-        let activeWebTabs = viewModel.activeWebViewTabIDs
-        ZStack(alignment: .leading) {
-            Group {
-                if activeWebTabs.isEmpty {
-                    DefaultHomeView(
-                        settings: settings,
-                        onSubmitSearch: { query in
-                            viewModel.performSearch(query)
-                        },
-                        onOpenURL: { url in
-                            viewModel.openNewTab(with: url)
-                        },
-                        onOpenNewTab: {
-                            viewModel.openNewTab()
-                        },
-                        onOpenSettings: {
-                            isShowingSettings = true
-                        }
-                    )
-                } else {
-                    splitViewContent(for: activeWebTabs)
-                }
-            }
-            .background(Color.browserBackground)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.leading, isWebContentFullscreen ? 0 : sidebarWidth)
-            .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
+        GeometryReader { geometry in
+            let activeWebTabs = viewModel.activeWebViewTabIDs
+#if os(iOS)
+            let shouldUseOverlaySidebar = horizontalSizeClass == .compact
+            let isSidebarVisible = shouldUseOverlaySidebar ? isShowingSidebarOverlay : !isWebContentFullscreen
+#else
+            let shouldUseOverlaySidebar = false
+            let isSidebarVisible = !isWebContentFullscreen
+#endif
 
-            if !isWebContentFullscreen {
-                BrowserSidebar(
-                    viewModel: viewModel,
-                    appearance: viewModel.sidebarAppearance,
-                    isAddressFocused: $isAddressFocused,
-                    isShowingSettings: $isShowingSettings,
-                    enterFullscreen: { withAnimation { isWebContentFullscreen = true } }
-                )
-                .frame(width: sidebarWidth)
-                .transition(.move(edge: .leading).combined(with: .opacity))
-            }
-
-            if isWebContentFullscreen {
-                VStack {
-                    HStack {
-                        NavigationControlButton(
-                            symbol: "sidebar.leading",
-                            help: "Show Sidebar",
-                            isEnabled: true,
-                            appearance: viewModel.sidebarAppearance,
-                            action: { withAnimation { isWebContentFullscreen = false } }
+            ZStack(alignment: .leading) {
+                Group {
+                    if activeWebTabs.isEmpty {
+                        DefaultHomeView(
+                            settings: settings,
+                            onSubmitSearch: { query in
+                                viewModel.performSearch(query)
+                            },
+                            onOpenURL: { url in
+                                viewModel.openNewTab(with: url)
+                            },
+                            onOpenNewTab: {
+                                viewModel.openNewTab()
+                            },
+                            onOpenSettings: {
+                                isShowingSettings = true
+                            }
                         )
+                    } else {
+                        splitViewContent(for: activeWebTabs)
+                    }
+                }
+                .background(Color.browserBackground)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.leading, !shouldUseOverlaySidebar && isSidebarVisible ? sidebarWidth : 0)
+                .animation(.easeInOut(duration: 0.22), value: isWebContentFullscreen)
+
+                if !shouldUseOverlaySidebar && isSidebarVisible {
+                    BrowserSidebar(
+                        viewModel: viewModel,
+                        appearance: viewModel.sidebarAppearance,
+                        isAddressFocused: $isAddressFocused,
+                        isShowingSettings: $isShowingSettings,
+                        enterFullscreen: { withAnimation { isWebContentFullscreen = true } }
+                    )
+                    .frame(width: sidebarWidth)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+
+#if os(iOS)
+                if shouldUseOverlaySidebar {
+                    ZStack(alignment: .leading) {
+                        if isSidebarVisible {
+                            Color.black.opacity(0.2)
+                                .ignoresSafeArea()
+                                .transition(.opacity)
+                                .onTapGesture {
+                                    withAnimation {
+                                        isShowingSidebarOverlay = false
+                                    }
+                                }
+                        }
+
+                        if isSidebarVisible {
+                            BrowserSidebar(
+                                viewModel: viewModel,
+                                appearance: viewModel.sidebarAppearance,
+                                isAddressFocused: $isAddressFocused,
+                                isShowingSettings: $isShowingSettings,
+                                enterFullscreen: {
+                                    withAnimation {
+                                        isShowingSidebarOverlay = false
+                                    }
+                                }
+                            )
+                            .frame(width: min(sidebarWidth, geometry.size.width * 0.88))
+                            .frame(maxHeight: .infinity, alignment: .topLeading)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.22), value: isSidebarVisible)
+                    .zIndex(1)
+                }
+#endif
+
+                if !shouldUseOverlaySidebar && isWebContentFullscreen {
+                    VStack {
+                        HStack {
+                            NavigationControlButton(
+                                symbol: "sidebar.leading",
+                                help: "Show Sidebar",
+                                isEnabled: true,
+                                appearance: viewModel.sidebarAppearance,
+                                action: { withAnimation { isWebContentFullscreen = false } }
+                            )
+                            Spacer()
+                        }
                         Spacer()
                     }
-                    Spacer()
+                    .padding(24)
                 }
-                .padding(24)
+
+#if os(iOS)
+                if shouldUseOverlaySidebar && !isSidebarVisible {
+                    VStack {
+                        HStack {
+                            NavigationControlButton(
+                                symbol: "sidebar.leading",
+                                help: "Show Sidebar",
+                                isEnabled: true,
+                                appearance: viewModel.sidebarAppearance,
+                                action: {
+                                    withAnimation {
+                                        isShowingSidebarOverlay = true
+                                    }
+                                }
+                            )
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(24)
+                    .allowsHitTesting(!isSidebarVisible)
+                }
+#endif
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .background(Color.browserBackground)
 #if os(macOS)
@@ -97,8 +172,25 @@ struct BrowserView: View {
 #endif
         .sheet(isPresented: $isShowingSettings) {
             SettingsPanel(settings: settings)
+#if os(macOS)
                 .frame(width: 600, height:600)
+#endif
         }
+#if os(iOS)
+        .onChange(of: horizontalSizeClass) { newValue in
+            if newValue != .compact {
+                isShowingSidebarOverlay = false
+            }
+        }
+        .onChange(of: viewModel.selectedTabID) { _ in
+            guard horizontalSizeClass == .compact else { return }
+            if isShowingSidebarOverlay {
+                withAnimation {
+                    isShowingSidebarOverlay = false
+                }
+            }
+        }
+#endif
     }
 
 #if os(macOS)
