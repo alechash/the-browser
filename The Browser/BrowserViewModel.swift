@@ -60,7 +60,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
     }
 
-    struct Space: Identifiable, Equatable {
+    struct Workspace: Identifiable, Equatable {
         struct PinnedTab: Identifiable, Equatable {
             let id: UUID
             var title: String
@@ -116,6 +116,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let id: UUID
         var name: String
         var iconName: String
+        var colorHex: String
         var createdAt: Date
         var pinnedTabs: [PinnedTab]
         var savedTabs: [SavedTab]
@@ -125,6 +126,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
         var isEmpty: Bool {
             pinnedTabs.isEmpty && savedTabs.isEmpty && notes.isEmpty && links.isEmpty && images.isEmpty
+        }
+
+        var accentColor: Color {
+            Color.fromHex(colorHex) ?? .browserAccent
         }
     }
 
@@ -171,13 +176,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
             persistSessionIfNeeded()
             clearAddressSuggestions()
             if selectedTabID != nil {
-                selectedSpaceID = nil
+                selectedWorkspaceID = nil
             }
         }
     }
-    @Published var selectedSpaceID: UUID? {
+    @Published var selectedWorkspaceID: UUID? {
         didSet {
-            if selectedSpaceID != nil {
+            if selectedWorkspaceID != nil {
                 if selectedTabID != nil {
                     selectedTabID = nil
                 } else {
@@ -199,7 +204,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published private(set) var addressSuggestions: [HistoryEntry]
     @Published private(set) var isShowingAddressSuggestions: Bool
     @Published private(set) var highlightedAddressSuggestionID: UUID?
-    @Published private(set) var spaces: [Space]
+    @Published private(set) var workspaces: [Workspace]
 
     var shouldShowProgress: Bool {
         guard let tab = currentTab, tab.kind == .web else { return false }
@@ -255,14 +260,19 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     var activeWebViewTabIDs: [UUID] {
-        guard selectedSpaceID == nil else { return [] }
+        guard selectedWorkspaceID == nil else { return [] }
         let identifiers = computeActiveWebViewTabIDs()
         ensureSplitFractions(for: identifiers)
         return identifiers
     }
 
-    var currentSpaceID: UUID? {
-        selectedSpaceID
+    var currentWorkspaceID: UUID? {
+        selectedWorkspaceID
+    }
+
+    var currentWorkspace: Workspace? {
+        guard let id = selectedWorkspaceID else { return nil }
+        return workspace(with: id)
     }
 
     func faviconURL(for tab: TabState) -> URL? {
@@ -282,6 +292,30 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private static let sessionStorageKey = "browser.session.state"
     private static let historyStorageKey = "browser.history.entries"
     private static let historyLimit = 500
+    private static let workspaceIconPool = [
+        "sparkles",
+        "paintpalette",
+        "lightbulb",
+        "globe",
+        "book",
+        "cube.transparent",
+        "paperplane",
+        "folder",
+        "leaf",
+        "puzzlepiece"
+    ]
+    private static let workspaceColorPool = [
+        "#6366F1",
+        "#F97316",
+        "#10B981",
+        "#EC4899",
+        "#0EA5E9",
+        "#F59E0B",
+        "#8B5CF6",
+        "#14B8A6",
+        "#EF4444",
+        "#22C55E"
+    ]
 #if os(macOS)
     private static let modernUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 #else
@@ -327,25 +361,34 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.addressSuggestions = []
         self.isShowingAddressSuggestions = false
         self.highlightedAddressSuggestionID = nil
-        self.spaces = [
-            Space(
+        self.workspaces = [
+            Workspace(
                 id: UUID(),
-                name: "Creative Corner",
-                iconName: "folder",
+                name: "The Browser",
+                iconName: BrowserViewModel.randomWorkspaceIcon(),
+                colorHex: BrowserViewModel.randomWorkspaceColor(),
                 createdAt: Date(),
                 pinnedTabs: [],
                 savedTabs: [],
                 notes: [
-                    Space.Note(id: UUID(), text: "Capture sparks of inspiration and return when you're ready to build.", createdAt: Date())
+                    Workspace.Note(id: UUID(), text: "Capture sparks of inspiration and return when you're ready to build.", createdAt: Date())
                 ],
                 links: [],
                 images: []
             )
         ]
-        self.selectedSpaceID = nil
+        self.selectedWorkspaceID = nil
 
         super.init()
         restorePreviousSessionIfNeeded()
+    }
+
+    static func randomWorkspaceIcon() -> String {
+        workspaceIconPool.randomElement() ?? "folder"
+    }
+
+    static func randomWorkspaceColor() -> String {
+        workspaceColorPool.randomElement() ?? "#3B82F6"
     }
 
     deinit {
@@ -400,19 +443,20 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Spaces
+    // MARK: - Workspaces
 
-    func space(with id: UUID) -> Space? {
-        spaces.first(where: { $0.id == id })
+    func workspace(with id: UUID) -> Workspace? {
+        workspaces.first(where: { $0.id == id })
     }
 
-    func createSpace(title: String = "New Space") {
+    func createWorkspace(title: String = "New Workspace") {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = trimmed.isEmpty ? "Untitled Space" : trimmed
-        let space = Space(
+        let name = trimmed.isEmpty ? "Untitled Workspace" : trimmed
+        let workspace = Workspace(
             id: UUID(),
             name: name,
-            iconName: "folder",
+            iconName: BrowserViewModel.randomWorkspaceIcon(),
+            colorHex: BrowserViewModel.randomWorkspaceColor(),
             createdAt: Date(),
             pinnedTabs: [],
             savedTabs: [],
@@ -420,192 +464,197 @@ final class BrowserViewModel: NSObject, ObservableObject {
             links: [],
             images: []
         )
-        spaces.insert(space, at: 0)
-        selectedSpaceID = space.id
+        workspaces.insert(workspace, at: 0)
+        selectedWorkspaceID = workspace.id
     }
 
-    func deleteSpace(_ id: UUID) {
-        if let index = spaces.firstIndex(where: { $0.id == id }) {
-            spaces.remove(at: index)
+    func deleteWorkspace(_ id: UUID) {
+        if let index = workspaces.firstIndex(where: { $0.id == id }) {
+            workspaces.remove(at: index)
         }
-        if selectedSpaceID == id {
-            selectedSpaceID = nil
+        if selectedWorkspaceID == id {
+            selectedWorkspaceID = nil
         }
     }
 
-    func renameSpace(_ id: UUID, to name: String) {
-        updateSpace(id) { space in
+    func renameWorkspace(_ id: UUID, to name: String) {
+        updateWorkspace(id) { workspace in
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            space.name = trimmed.isEmpty ? space.name : trimmed
+            workspace.name = trimmed.isEmpty ? workspace.name : trimmed
         }
     }
 
-    func updateSpaceIcon(_ id: UUID, to iconName: String) {
-        updateSpace(id) { space in
+    func updateWorkspaceIcon(_ id: UUID, to iconName: String) {
+        updateWorkspace(id) { workspace in
             let trimmed = iconName.trimmingCharacters(in: .whitespacesAndNewlines)
-            space.iconName = trimmed.isEmpty ? "folder" : trimmed
+            guard !trimmed.isEmpty else { return }
+            workspace.iconName = trimmed
         }
     }
 
-    func selectSpace(_ id: UUID) {
-        guard spaces.contains(where: { $0.id == id }) else { return }
-        selectedSpaceID = id
+    func selectWorkspace(_ id: UUID) {
+        guard workspaces.contains(where: { $0.id == id }) else { return }
+        selectedWorkspaceID = id
     }
 
-    func isSpaceSelected(_ id: UUID) -> Bool {
-        selectedSpaceID == id
+    func isWorkspaceSelected(_ id: UUID) -> Bool {
+        selectedWorkspaceID == id
     }
 
-    func pinCurrentTab(in spaceID: UUID) {
+    func clearWorkspaceSelection() {
+        selectedWorkspaceID = nil
+    }
+
+    func pinCurrentTab(in workspaceID: UUID) {
         guard let tab = currentTab else { return }
-        let pinned = Space.PinnedTab(
+        let pinned = Workspace.PinnedTab(
             id: UUID(),
             title: tab.title,
             url: tab.currentURL ?? URL(string: tab.addressBarText.trimmingCharacters(in: .whitespacesAndNewlines)),
             capturedAt: Date()
         )
-        updateSpace(spaceID) { space in
-            if !space.pinnedTabs.contains(where: { $0.url == pinned.url && $0.title == pinned.title }) {
-                space.pinnedTabs.insert(pinned, at: 0)
+        updateWorkspace(workspaceID) { workspace in
+            if !workspace.pinnedTabs.contains(where: { $0.url == pinned.url && $0.title == pinned.title }) {
+                workspace.pinnedTabs.insert(pinned, at: 0)
             }
         }
     }
 
-    func saveCurrentTab(to spaceID: UUID) {
+    func saveCurrentTab(to workspaceID: UUID) {
         guard let tabID = selectedTabID else { return }
-        saveTab(tabID, to: spaceID)
+        saveTab(tabID, to: workspaceID)
     }
 
-    func saveTab(_ tabID: UUID, to spaceID: UUID) {
+    func saveTab(_ tabID: UUID, to workspaceID: UUID) {
         guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         let tab = tabs[tabIndex]
         guard tab.kind == .web else { return }
-        let saved = Space.SavedTab(
+        let saved = Workspace.SavedTab(
             id: UUID(),
             title: tab.displayTitle,
             url: resolvedURL(for: tabID, tab: tab),
             capturedAt: Date()
         )
 
-        updateSpace(spaceID) { space in
-            if !space.savedTabs.contains(where: { existing in
+        updateWorkspace(workspaceID) { workspace in
+            if !workspace.savedTabs.contains(where: { existing in
                 existing.title == saved.title && existing.url == saved.url
             }) {
-                space.savedTabs.insert(saved, at: 0)
+                workspace.savedTabs.insert(saved, at: 0)
             }
         }
     }
 
-    func removePinnedTab(in spaceID: UUID, pinnedID: UUID) {
-        updateSpace(spaceID) { space in
-            if let index = space.pinnedTabs.firstIndex(where: { $0.id == pinnedID }) {
-                space.pinnedTabs.remove(at: index)
+    func removePinnedTab(in workspaceID: UUID, pinnedID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.pinnedTabs.firstIndex(where: { $0.id == pinnedID }) {
+                workspace.pinnedTabs.remove(at: index)
             }
         }
     }
 
-    func openPinnedTab(spaceID: UUID, pinnedID: UUID) {
-        guard let space = space(with: spaceID),
-              let pinned = space.pinnedTabs.first(where: { $0.id == pinnedID }),
+    func openPinnedTab(workspaceID: UUID, pinnedID: UUID) {
+        guard let workspace = workspace(with: workspaceID),
+              let pinned = workspace.pinnedTabs.first(where: { $0.id == pinnedID }),
               let url = pinned.url
         else { return }
         openNewTab(with: url)
     }
 
-    func removeSavedTab(in spaceID: UUID, savedID: UUID) {
-        updateSpace(spaceID) { space in
-            if let index = space.savedTabs.firstIndex(where: { $0.id == savedID }) {
-                space.savedTabs.remove(at: index)
+    func removeSavedTab(in workspaceID: UUID, savedID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.savedTabs.firstIndex(where: { $0.id == savedID }) {
+                workspace.savedTabs.remove(at: index)
             }
         }
     }
 
-    func openSavedTab(spaceID: UUID, savedID: UUID) {
-        guard let space = space(with: spaceID),
-              let saved = space.savedTabs.first(where: { $0.id == savedID }),
+    func openSavedTab(workspaceID: UUID, savedID: UUID) {
+        guard let workspace = workspace(with: workspaceID),
+              let saved = workspace.savedTabs.first(where: { $0.id == savedID }),
               let url = saved.url
         else { return }
         openNewTab(with: url)
     }
 
-    func addNote(to spaceID: UUID, text: String) {
+    func addNote(to workspaceID: UUID, text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let note = Space.Note(id: UUID(), text: trimmed, createdAt: Date())
-        updateSpace(spaceID) { space in
-            space.notes.insert(note, at: 0)
+        let note = Workspace.Note(id: UUID(), text: trimmed, createdAt: Date())
+        updateWorkspace(workspaceID) { workspace in
+            workspace.notes.insert(note, at: 0)
         }
     }
 
-    func removeNote(in spaceID: UUID, noteID: UUID) {
-        updateSpace(spaceID) { space in
-            if let index = space.notes.firstIndex(where: { $0.id == noteID }) {
-                space.notes.remove(at: index)
+    func removeNote(in workspaceID: UUID, noteID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.notes.firstIndex(where: { $0.id == noteID }) {
+                workspace.notes.remove(at: index)
             }
         }
     }
 
-    func addLink(to spaceID: UUID, title: String, urlString: String) {
+    func addLink(to workspaceID: UUID, title: String, urlString: String) {
         let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedURL.isEmpty else { return }
-        let link = Space.Link(
+        let link = Workspace.Link(
             id: UUID(),
             title: title,
             url: URL(string: trimmedURL),
             createdAt: Date()
         )
-        updateSpace(spaceID) { space in
-            space.links.insert(link, at: 0)
+        updateWorkspace(workspaceID) { workspace in
+            workspace.links.insert(link, at: 0)
         }
     }
 
-    func removeLink(in spaceID: UUID, linkID: UUID) {
-        updateSpace(spaceID) { space in
-            if let index = space.links.firstIndex(where: { $0.id == linkID }) {
-                space.links.remove(at: index)
+    func removeLink(in workspaceID: UUID, linkID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.links.firstIndex(where: { $0.id == linkID }) {
+                workspace.links.remove(at: index)
             }
         }
     }
 
-    func openLink(spaceID: UUID, linkID: UUID) {
-        guard let space = space(with: spaceID),
-              let link = space.links.first(where: { $0.id == linkID }),
+    func openLink(workspaceID: UUID, linkID: UUID) {
+        guard let workspace = workspace(with: workspaceID),
+              let link = workspace.links.first(where: { $0.id == linkID }),
               let url = link.url
         else { return }
         openNewTab(with: url)
     }
 
-    func addImage(to spaceID: UUID, urlString: String, caption: String) {
+    func addImage(to workspaceID: UUID, urlString: String, caption: String) {
         let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedURL.isEmpty, let url = URL(string: trimmedURL) else { return }
-        addImage(to: spaceID, url: url, caption: caption)
+        addImage(to: workspaceID, url: url, caption: caption)
     }
 
-    func addImage(to spaceID: UUID, url: URL, caption: String = "") {
-        let resource = Space.ImageResource(
+    func addImage(to workspaceID: UUID, url: URL, caption: String = "") {
+        let resource = Workspace.ImageResource(
             id: UUID(),
             url: url,
             caption: caption,
             createdAt: Date()
         )
-        updateSpace(spaceID) { space in
-            if !space.images.contains(where: { $0.url == resource.url }) {
-                space.images.insert(resource, at: 0)
+        updateWorkspace(workspaceID) { workspace in
+            if !workspace.images.contains(where: { $0.url == resource.url }) {
+                workspace.images.insert(resource, at: 0)
             }
         }
     }
 
-    func removeImage(in spaceID: UUID, imageID: UUID) {
-        updateSpace(spaceID) { space in
-            if let index = space.images.firstIndex(where: { $0.id == imageID }) {
-                space.images.remove(at: index)
+    func removeImage(in workspaceID: UUID, imageID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.images.firstIndex(where: { $0.id == imageID }) {
+                workspace.images.remove(at: index)
             }
         }
     }
 
-    private func updateSpace(_ id: UUID, _ update: (inout Space) -> Void) {
-        guard let index = spaces.firstIndex(where: { $0.id == id }) else { return }
-        update(&spaces[index])
+    private func updateWorkspace(_ id: UUID, _ update: (inout Workspace) -> Void) {
+        guard let index = workspaces.firstIndex(where: { $0.id == id }) else { return }
+        update(&workspaces[index])
     }
 
     func handleIncomingURL(_ url: URL) {
@@ -1927,12 +1976,12 @@ extension BrowserViewModel: WKUIDelegate {
             return defaultMenuItems
         }
 
-        guard !spaces.isEmpty else { return defaultMenuItems }
+        guard !workspaces.isEmpty else { return defaultMenuItems }
 
         var items = defaultMenuItems
-        let additions = spaces.map { space in
-            WKContextMenuItem(title: "Save Image to \(space.name)") { [weak self] in
-                self?.addImage(to: space.id, url: imageURL)
+        let additions = workspaces.map { workspace in
+            WKContextMenuItem(title: "Save Image to \(workspace.name)") { [weak self] in
+                self?.addImage(to: workspace.id, url: imageURL)
             }
         }
 
@@ -1948,19 +1997,20 @@ extension BrowserViewModel: WKUIDelegate {
 
 #if os(iOS)
     func webView(_ webView: WKWebView, contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo, completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
-        guard let imageURL = elementInfo.imageURL, !spaces.isEmpty else {
+        guard let imageURL = elementInfo.imageURL, !workspaces.isEmpty else {
             completionHandler(nil)
             return
         }
 
         completionHandler(UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { suggested in
-            let actions = self.spaces.map { space in
-                UIAction(title: "Save to \(space.name)", image: UIImage(systemName: "folder")) { _ in
-                    self.addImage(to: space.id, url: imageURL)
+            let actions = self.workspaces.map { workspace in
+                let icon = UIImage(systemName: workspace.iconName) ?? UIImage(systemName: "folder")
+                return UIAction(title: "Save to \(workspace.name)", image: icon) { _ in
+                    self.addImage(to: workspace.id, url: imageURL)
                 }
             }
 
-            let spaceMenu = UIMenu(title: "Save Image to Space", options: .displayInline, children: actions)
+            let spaceMenu = UIMenu(title: "Save Image to Workspace", options: .displayInline, children: actions)
             if let suggested {
                 return UIMenu(children: [spaceMenu] + suggested.children)
             } else {

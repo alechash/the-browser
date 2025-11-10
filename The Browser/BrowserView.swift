@@ -26,8 +26,8 @@ struct BrowserView: View {
         let currentTabKind = viewModel.currentTabKind
         ZStack(alignment: .leading) {
             Group {
-                if let spaceID = viewModel.currentSpaceID {
-                    SpaceWorkspaceView(viewModel: viewModel, spaceID: spaceID, appearance: viewModel.sidebarAppearance)
+                if let workspaceID = viewModel.currentWorkspaceID {
+                    WorkspaceDetailView(viewModel: viewModel, workspaceID: workspaceID, appearance: viewModel.sidebarAppearance)
                 } else if currentTabKind == .history {
                     HistoryView(viewModel: viewModel)
                 } else if activeWebTabs.isEmpty {
@@ -325,9 +325,9 @@ private struct BrowserSidebar: View {
     let addressFieldController: AddressFieldController
     @State private var isInteractingWithAddressSuggestions = false
 #endif
-    @State private var isCreatingSpace = false
-    @State private var newSpaceName: String = ""
-    @FocusState private var isSpaceCreationFieldFocused: Bool
+    @State private var isCreatingWorkspace = false
+    @State private var newWorkspaceName: String = ""
+    @FocusState private var isWorkspaceCreationFieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -378,7 +378,23 @@ private struct BrowserSidebar: View {
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .foregroundStyle(appearance.primary)
-    .liquidGlassBackground(tint: appearance.background, cornerRadius: 0, includeShadow: false)
+    .background(
+        LinearGradient(
+            colors: [
+                Color.browserSidebarBackground.opacity(0.98),
+                Color.browserSidebarBackground.opacity(0.9)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    )
+    .overlay(
+        Rectangle()
+            .fill(Color.black.opacity(0.12))
+            .frame(width: 1)
+            .frame(maxHeight: .infinity),
+        alignment: .trailing
+    )
     }
 
     private var header: some View {
@@ -388,24 +404,74 @@ private struct BrowserSidebar: View {
 #endif
 
             HStack(spacing: 12) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 18, weight: .heavy))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        Circle()
-                            .fill(Color.browserAccent)
-                            .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 6)
-                    )
+                workspaceGlyph
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("The Browser")
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(appearance.primary)
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Workspace")
                         .font(.caption)
                         .foregroundStyle(appearance.secondary)
+
+                    Menu {
+                        ForEach(viewModel.workspaces) { workspace in
+                            Button {
+                                viewModel.selectWorkspace(workspace.id)
+                            } label: {
+                                HStack {
+                                    Label(workspace.name, systemImage: workspace.iconName)
+                                    if viewModel.isWorkspaceSelected(workspace.id) {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+
+                        if viewModel.currentWorkspaceID != nil {
+                            if !viewModel.workspaces.isEmpty {
+                                Divider()
+                            }
+                            Button {
+                                viewModel.clearWorkspaceSelection()
+                            } label: {
+                                Label("Close Workspace", systemImage: "xmark.circle")
+                            }
+                        }
+
+                        if viewModel.currentWorkspaceID != nil || !viewModel.workspaces.isEmpty {
+                            Divider()
+                        }
+
+                        Button {
+                            if isCreatingWorkspace {
+                                cancelNewWorkspace()
+                            } else {
+                                toggleWorkspaceCreation()
+                            }
+                        } label: {
+                            Label(isCreatingWorkspace ? "Cancel New Workspace" : "New Workspace", systemImage: isCreatingWorkspace ? "xmark" : "plus")
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text(activeWorkspace?.name ?? "Select Workspace")
+                                .font(.headline)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(appearance.primary)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(appearance.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(workspaceAccent.opacity(0.22))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(workspaceAccent.opacity(0.45), lineWidth: 1)
+                        )
+                    }
+                    .menuStyle(.borderlessButton)
                 }
             }
         }
@@ -705,22 +771,52 @@ private struct BrowserSidebar: View {
         }
     }
 
+    private var activeWorkspace: BrowserViewModel.Workspace? {
+        viewModel.currentWorkspace ?? viewModel.workspaces.first
+    }
+
+    private var workspaceAccent: Color {
+        activeWorkspace?.accentColor ?? appearance.controlTint
+    }
+
+    private var workspaceGlyph: some View {
+        let iconName = activeWorkspace?.iconName ?? "sparkles"
+        return Image(systemName: iconName)
+            .font(.system(size: 18, weight: .heavy))
+            .foregroundStyle(Color.white)
+            .frame(width: 44, height: 44)
+            .background(
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                workspaceAccent.opacity(0.95),
+                                workspaceAccent.opacity(0.7)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .shadow(color: workspaceAccent.opacity(0.35), radius: 12, x: 0, y: 8)
+            )
+    }
+
     private var tabList: some View {
         VStack(alignment: .leading, spacing: 20) {
-            spacesSection
+            workspacesSection
             tabsSection
         }
     }
 
-    private var spacesSection: some View {
+    private var workspacesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Text("Spaces")
+                Text("Workspaces")
                     .font(.caption)
                     .foregroundStyle(appearance.secondary)
                 Spacer()
-                Button(action: toggleSpaceCreation) {
-                    Image(systemName: isCreatingSpace ? "xmark" : "plus.folder")
+                Button(action: toggleWorkspaceCreation) {
+                    Image(systemName: isCreatingWorkspace ? "xmark" : "plus.folder")
                         .font(.system(size: 14, weight: .bold))
                         .frame(width: 28, height: 28)
                         .foregroundStyle(appearance.primary)
@@ -728,36 +824,36 @@ private struct BrowserSidebar: View {
                 .buttonStyle(.plain)
                 .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 14, includeShadow: false)
 #if os(macOS)
-                .help(isCreatingSpace ? "Cancel" : "Create Space")
+                .help(isCreatingWorkspace ? "Cancel" : "Create Workspace")
 #endif
             }
 
-            if isCreatingSpace {
-                SpaceCreationRow(
-                    name: $newSpaceName,
+            if isCreatingWorkspace {
+                WorkspaceCreationRow(
+                    name: $newWorkspaceName,
                     appearance: appearance,
-                    isFieldFocused: $isSpaceCreationFieldFocused,
-                    commitAction: commitNewSpace,
-                    cancelAction: cancelNewSpace
+                    isFieldFocused: $isWorkspaceCreationFieldFocused,
+                    commitAction: commitNewWorkspace,
+                    cancelAction: cancelNewWorkspace
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            if viewModel.spaces.isEmpty {
-                Text("Spaces are where ideas get room to breathe. Create one to start collecting inspiration.")
+            if viewModel.workspaces.isEmpty {
+                Text("Workspaces are where ideas get room to breathe. Create one to start collecting inspiration.")
                     .font(.footnote)
                     .foregroundStyle(appearance.secondary)
                     .padding(.horizontal, 6)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(viewModel.spaces) { space in
-                        SpaceRow(
-                            space: space,
-                            isSelected: viewModel.isSpaceSelected(space.id),
+                    ForEach(viewModel.workspaces) { workspace in
+                        WorkspaceRow(
+                            workspace: workspace,
+                            isSelected: viewModel.isWorkspaceSelected(workspace.id),
                             appearance: appearance,
-                            selectAction: { viewModel.selectSpace(space.id) },
-                            pinAction: { viewModel.pinCurrentTab(in: space.id) },
-                            deleteAction: { viewModel.deleteSpace(space.id) }
+                            selectAction: { viewModel.selectWorkspace(workspace.id) },
+                            pinAction: { viewModel.pinCurrentTab(in: workspace.id) },
+                            deleteAction: { viewModel.deleteWorkspace(workspace.id) }
                         )
                     }
                 }
@@ -765,35 +861,35 @@ private struct BrowserSidebar: View {
         }
     }
 
-    private func toggleSpaceCreation() {
-        if isCreatingSpace {
-            cancelNewSpace()
+    private func toggleWorkspaceCreation() {
+        if isCreatingWorkspace {
+            cancelNewWorkspace()
         } else {
-            newSpaceName = ""
+            newWorkspaceName = ""
             withAnimation(.easeInOut(duration: 0.2)) {
-                isCreatingSpace = true
+                isCreatingWorkspace = true
             }
             DispatchQueue.main.async {
-                isSpaceCreationFieldFocused = true
+                isWorkspaceCreationFieldFocused = true
             }
         }
     }
 
-    private func commitNewSpace() {
-        let trimmed = newSpaceName.trimmingCharacters(in: .whitespacesAndNewlines)
-        viewModel.createSpace(title: trimmed.isEmpty ? "New Space" : trimmed)
-        newSpaceName = ""
-        isSpaceCreationFieldFocused = false
+    private func commitNewWorkspace() {
+        let trimmed = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        viewModel.createWorkspace(title: trimmed.isEmpty ? "New Workspace" : trimmed)
+        newWorkspaceName = ""
+        isWorkspaceCreationFieldFocused = false
         withAnimation(.easeInOut(duration: 0.2)) {
-            isCreatingSpace = false
+            isCreatingWorkspace = false
         }
     }
 
-    private func cancelNewSpace() {
-        newSpaceName = ""
-        isSpaceCreationFieldFocused = false
+    private func cancelNewWorkspace() {
+        newWorkspaceName = ""
+        isWorkspaceCreationFieldFocused = false
         withAnimation(.easeInOut(duration: 0.2)) {
-            isCreatingSpace = false
+            isCreatingWorkspace = false
         }
     }
 
@@ -847,7 +943,7 @@ private struct BrowserSidebar: View {
                             togglePopOutAction: { viewModel.togglePopOut(for: tab.id) }
                         )
                         .contextMenu {
-                            spacesContextMenu(for: tab)
+                            workspacesContextMenu(for: tab)
                         }
 #else
                         TabRow(
@@ -863,7 +959,7 @@ private struct BrowserSidebar: View {
                             splitOrientation: viewModel.splitViewOrientation
                         )
                         .contextMenu {
-                            spacesContextMenu(for: tab)
+                            workspacesContextMenu(for: tab)
                         }
 #endif
                     }
@@ -874,20 +970,20 @@ private struct BrowserSidebar: View {
     }
 
     @ViewBuilder
-    private func spacesContextMenu(for tab: BrowserViewModel.TabState) -> some View {
+    private func workspacesContextMenu(for tab: BrowserViewModel.TabState) -> some View {
         if tab.kind != .web {
             Label("Only web tabs can be saved", systemImage: "exclamationmark.triangle")
                 .disabled(true)
-        } else if viewModel.spaces.isEmpty {
-            Label("Create a space to save tabs", systemImage: "folder.badge.plus")
+        } else if viewModel.workspaces.isEmpty {
+            Label("Create a workspace to save tabs", systemImage: "folder.badge.plus")
                 .disabled(true)
         } else {
-            Section("Save Tab to Space") {
-                ForEach(viewModel.spaces) { space in
+            Section("Save Tab to Workspace") {
+                ForEach(viewModel.workspaces) { workspace in
                     Button {
-                        viewModel.saveTab(tab.id, to: space.id)
+                        viewModel.saveTab(tab.id, to: workspace.id)
                     } label: {
-                        Label(space.name, systemImage: "folder")
+                        Label(workspace.name, systemImage: workspace.iconName)
                     }
                 }
             }
@@ -911,7 +1007,7 @@ private struct BrowserSidebar: View {
     }
 }
 
-private struct SpaceCreationRow: View {
+private struct WorkspaceCreationRow: View {
     @Binding var name: String
     let appearance: BrowserSidebarAppearance
     var isFieldFocused: FocusState<Bool>.Binding
@@ -920,7 +1016,7 @@ private struct SpaceCreationRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("New Space")
+            Text("New Workspace")
                 .font(.caption)
                 .foregroundStyle(appearance.secondary)
 
@@ -962,8 +1058,8 @@ private struct SpaceCreationRow: View {
     }
 }
 
-private struct SpaceRow: View {
-    let space: BrowserViewModel.Space
+private struct WorkspaceRow: View {
+    let workspace: BrowserViewModel.Workspace
     let isSelected: Bool
     let appearance: BrowserSidebarAppearance
     let selectAction: () -> Void
@@ -975,14 +1071,23 @@ private struct SpaceRow: View {
             Image(systemName: resolvedIconName)
                 .font(.system(size: 20, weight: .semibold))
                 .frame(width: 32, height: 32)
-                .foregroundStyle(appearance.primary)
+                .foregroundStyle(Color.white)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(appearance.controlTint.opacity(isSelected ? 1 : 0.9))
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    workspace.accentColor.opacity(0.95),
+                                    workspace.accentColor.opacity(0.7)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                 )
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(space.name)
+                Text(workspace.name)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(appearance.primary)
 
@@ -1004,7 +1109,7 @@ private struct SpaceRow: View {
                 .buttonStyle(.plain)
                 .liquidGlassBackground(tint: appearance.controlTint.opacity(0.85), cornerRadius: 10, includeShadow: false)
 #if os(macOS)
-                .help("Pin Current Tab to Space")
+                .help("Pin Current Tab to Workspace")
 #endif
 
                 Button(role: .destructive, action: deleteAction) {
@@ -1016,40 +1121,43 @@ private struct SpaceRow: View {
                 .buttonStyle(.plain)
                 .liquidGlassBackground(tint: appearance.controlTint.opacity(0.75), cornerRadius: 10, includeShadow: false)
 #if os(macOS)
-                .help("Delete Space")
+                .help("Delete Workspace")
 #endif
             }
-            .opacity(space.isEmpty ? 0.85 : 1)
+            .opacity(workspace.isEmpty ? 0.85 : 1)
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .liquidGlassBackground(tint: appearance.controlTint.opacity(isSelected ? 0.95 : 0.72), cornerRadius: 16, includeShadow: false)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(workspace.accentColor.opacity(isSelected ? 0.24 : 0.14))
+        )
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .opacity(isSelected ? 1 : 0.92)
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(appearance.primary.opacity(isSelected ? 0.4 : 0), lineWidth: 1.5)
+                .stroke(workspace.accentColor.opacity(isSelected ? 0.6 : 0), lineWidth: 1.5)
         )
         .onTapGesture(perform: selectAction)
     }
 
     private var summaryText: String {
         var parts: [String] = []
-        if !space.pinnedTabs.isEmpty {
-            parts.append("\(space.pinnedTabs.count) pinned tab\(space.pinnedTabs.count == 1 ? "" : "s")")
+        if !workspace.pinnedTabs.isEmpty {
+            parts.append("\(workspace.pinnedTabs.count) pinned tab\(workspace.pinnedTabs.count == 1 ? "" : "s")")
         }
-        if !space.savedTabs.isEmpty {
-            parts.append("\(space.savedTabs.count) saved tab\(space.savedTabs.count == 1 ? "" : "s")")
+        if !workspace.savedTabs.isEmpty {
+            parts.append("\(workspace.savedTabs.count) saved tab\(workspace.savedTabs.count == 1 ? "" : "s")")
         }
-        if !space.notes.isEmpty {
-            parts.append("\(space.notes.count) note\(space.notes.count == 1 ? "" : "s")")
+        if !workspace.notes.isEmpty {
+            parts.append("\(workspace.notes.count) note\(workspace.notes.count == 1 ? "" : "s")")
         }
-        if !space.links.isEmpty {
-            parts.append("\(space.links.count) link\(space.links.count == 1 ? "" : "s")")
+        if !workspace.links.isEmpty {
+            parts.append("\(workspace.links.count) link\(workspace.links.count == 1 ? "" : "s")")
         }
-        if !space.images.isEmpty {
-            parts.append("\(space.images.count) image\(space.images.count == 1 ? "" : "s")")
+        if !workspace.images.isEmpty {
+            parts.append("\(workspace.images.count) image\(workspace.images.count == 1 ? "" : "s")")
         }
         if parts.isEmpty {
             return "An open canvas for creativity"
@@ -1058,14 +1166,14 @@ private struct SpaceRow: View {
     }
 
     private var resolvedIconName: String {
-        let trimmed = space.iconName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = workspace.iconName.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "folder" : trimmed
     }
 }
 
-private struct SpaceWorkspaceView: View {
+private struct WorkspaceDetailView: View {
     @ObservedObject var viewModel: BrowserViewModel
-    let spaceID: UUID
+    let workspaceID: UUID
     let appearance: BrowserSidebarAppearance
     @State private var noteDraft: String = ""
     @State private var linkTitle: String = ""
@@ -1084,21 +1192,21 @@ private struct SpaceWorkspaceView: View {
         [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 14)]
     }
 
-    private var space: BrowserViewModel.Space? {
-        viewModel.space(with: spaceID)
+    private var workspace: BrowserViewModel.Workspace? {
+        viewModel.workspace(with: workspaceID)
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
                 header
-                if let space {
+                if let workspace {
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
-                        pinnedTabsCard(space)
-                        savedTabsCard(space)
-                        notesCard(space)
-                        linksCard(space)
-                        imagesCard(space)
+                        pinnedTabsCard(workspace)
+                        savedTabsCard(workspace)
+                        notesCard(workspace)
+                        linksCard(workspace)
+                        imagesCard(workspace)
                     }
                 } else {
                     spaceUnavailable
@@ -1113,15 +1221,15 @@ private struct SpaceWorkspaceView: View {
 
     private var header: some View {
         Group {
-            if let space {
+            if let workspace {
                 VStack(alignment: .leading, spacing: 28) {
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 34, style: .continuous)
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        appearance.controlTint.opacity(0.95),
-                                        appearance.controlTint.opacity(0.55)
+                                        workspace.accentColor.opacity(0.95),
+                                        workspace.accentColor.opacity(0.55)
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
@@ -1129,19 +1237,19 @@ private struct SpaceWorkspaceView: View {
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 34, style: .continuous)
-                                    .stroke(appearance.primary.opacity(0.12), lineWidth: 1.2)
+                                    .stroke(Color.white.opacity(0.25), lineWidth: 1.2)
                             )
 
                         VStack(alignment: .leading, spacing: 24) {
                             HStack(alignment: .top, spacing: 22) {
-                                iconPicker(for: space)
+                                iconPicker(for: workspace)
 
                                 VStack(alignment: .leading, spacing: 10) {
                                     TextField(
-                                        "Space Name",
+                                        "Workspace Name",
                                         text: Binding(
-                                            get: { space.name },
-                                            set: { viewModel.renameSpace(spaceID, to: $0) }
+                                            get: { workspace.name },
+                                            set: { viewModel.renameWorkspace(workspaceID, to: $0) }
                                         )
                                     )
                                     .font(.system(size: 36, weight: .bold, design: .rounded))
@@ -1149,9 +1257,9 @@ private struct SpaceWorkspaceView: View {
                                     .foregroundStyle(appearance.primary)
 
                                     HStack(spacing: 10) {
-                                        SpaceBadge(text: formatted(date: space.createdAt), icon: "calendar", appearance: appearance)
-                                        if space.isEmpty {
-                                            SpaceBadge(text: "Fresh Canvas", icon: "sparkles", appearance: appearance)
+                                        WorkspaceBadge(text: formatted(date: workspace.createdAt), icon: "calendar", appearance: appearance)
+                                        if workspace.isEmpty {
+                                            WorkspaceBadge(text: "Fresh Canvas", icon: "sparkles", appearance: appearance)
                                         }
                                     }
                                 }
@@ -1160,12 +1268,12 @@ private struct SpaceWorkspaceView: View {
 
                                 Menu {
                                     Button(role: .destructive) {
-                                        viewModel.deleteSpace(spaceID)
+                                        viewModel.deleteWorkspace(workspaceID)
                                     } label: {
-                                        Label("Delete Space", systemImage: "trash")
+                                        Label("Delete Workspace", systemImage: "trash")
                                     }
                                 } label: {
-                                    Label("Manage Space", systemImage: "ellipsis.circle")
+                                    Label("Manage Workspace", systemImage: "ellipsis.circle")
                                         .labelStyle(.iconOnly)
                                         .font(.system(size: 24, weight: .semibold))
                                         .frame(width: 52, height: 52)
@@ -1177,17 +1285,17 @@ private struct SpaceWorkspaceView: View {
                                 }
                                 .menuStyle(.borderlessButton)
 #if os(macOS)
-                                .help("Space Actions")
+                                .help("Workspace Actions")
 #endif
                             }
 
-                            metricRow(for: space)
+                            metricRow(for: workspace)
 
-                            heroActions(for: space)
+                            heroActions(for: workspace)
                         }
                         .padding(32)
                     }
-                    .shadow(color: appearance.primary.opacity(0.14), radius: 24, x: 0, y: 18)
+                    .shadow(color: workspace.accentColor.opacity(0.25), radius: 24, x: 0, y: 18)
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Icon (SF Symbol)")
@@ -1197,25 +1305,25 @@ private struct SpaceWorkspaceView: View {
                         TextField(
                             "folder",
                             text: Binding(
-                                get: { space.iconName },
-                                set: { viewModel.updateSpaceIcon(spaceID, to: $0) }
+                                get: { workspace.iconName },
+                                set: { viewModel.updateWorkspaceIcon(workspaceID, to: $0) }
                             )
                         )
                         .textFieldStyle(.roundedBorder)
                     }
                 }
             } else {
-                spaceUnavailable
+                workspaceUnavailable
             }
         }
     }
 
-    private var spaceUnavailable: some View {
+    private var workspaceUnavailable: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Space Unavailable")
+            Text("Workspace Unavailable")
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(appearance.primary)
-            Text("This space could not be found. It may have been removed or is still loading.")
+            Text("This workspace could not be found. It may have been removed or is still loading.")
                 .font(.callout)
                 .foregroundStyle(appearance.secondary)
         }
@@ -1227,16 +1335,16 @@ private struct SpaceWorkspaceView: View {
         )
     }
 
-    private func pinnedTabsCard(_ space: BrowserViewModel.Space) -> some View {
-        SpaceCard(title: "Pinned Tabs", icon: "pin", appearance: appearance) {
-            if space.pinnedTabs.isEmpty {
-                SpaceEmptyState(
+    private func pinnedTabsCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Pinned Tabs", icon: "pin", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.pinnedTabs.isEmpty {
+                WorkspaceEmptyState(
                     message: "No pinned tabs yet. Pin pages you want quick access to."
                 )
             } else {
                 VStack(spacing: 12) {
-                    ForEach(space.pinnedTabs) { pinned in
-                        SpaceItemContainer(appearance: appearance) {
+                    ForEach(workspace.pinnedTabs) { pinned in
+                        WorkspaceItemContainer(accent: workspace.accentColor, appearance: appearance) {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(pinned.title)
                                     .font(.subheadline.weight(.semibold))
@@ -1254,13 +1362,13 @@ private struct SpaceWorkspaceView: View {
 
                             VStack(spacing: 8) {
                                 Button("Open") {
-                                    viewModel.openPinnedTab(spaceID: spaceID, pinnedID: pinned.id)
+                                    viewModel.openPinnedTab(workspaceID: workspaceID, pinnedID: pinned.id)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(pinned.url == nil)
 
                                 Button(role: .destructive) {
-                                    viewModel.removePinnedTab(in: spaceID, pinnedID: pinned.id)
+                                    viewModel.removePinnedTab(in: workspaceID, pinnedID: pinned.id)
                                 } label: {
                                     Label("Remove", systemImage: "trash")
                                 }
@@ -1274,7 +1382,7 @@ private struct SpaceWorkspaceView: View {
             Divider().padding(.vertical, 4)
 
             Button {
-                viewModel.pinCurrentTab(in: spaceID)
+                viewModel.pinCurrentTab(in: workspaceID)
             } label: {
                 Label("Pin Current Tab", systemImage: "pin")
                     .font(.subheadline.weight(.semibold))
@@ -1285,29 +1393,29 @@ private struct SpaceWorkspaceView: View {
         }
     }
 
-    private func heroActions(for space: BrowserViewModel.Space) -> some View {
+    private func heroActions(for workspace: BrowserViewModel.Workspace) -> some View {
         LazyVGrid(columns: heroColumns, alignment: .leading, spacing: 14) {
-            SpaceHeroAction(
+            WorkspaceHeroAction(
                 title: "Pin Current Tab",
                 subtitle: "Keep essentials a tap away",
                 icon: "pin",
                 tint: Color.blue,
                 appearance: appearance,
                 isDisabled: !viewModel.currentTabExists,
-                action: { viewModel.pinCurrentTab(in: spaceID) }
+                action: { viewModel.pinCurrentTab(in: workspaceID) }
             )
 
-            SpaceHeroAction(
+            WorkspaceHeroAction(
                 title: "Save for Later",
                 subtitle: "Archive the current page",
                 icon: "bookmark",
                 tint: Color.purple,
                 appearance: appearance,
                 isDisabled: !viewModel.currentTabExists,
-                action: { viewModel.saveCurrentTab(to: spaceID) }
+                action: { viewModel.saveCurrentTab(to: workspaceID) }
             )
 
-            SpaceHeroAction(
+            WorkspaceHeroAction(
                 title: "Capture a Note",
                 subtitle: "Jot thoughts before they vanish",
                 icon: "square.and.pencil",
@@ -1317,7 +1425,7 @@ private struct SpaceWorkspaceView: View {
                 action: primeNoteComposer
             )
 
-            SpaceHeroAction(
+            WorkspaceHeroAction(
                 title: "Save a Link",
                 subtitle: "Drop in a quick reference",
                 icon: "link.badge.plus",
@@ -1327,7 +1435,7 @@ private struct SpaceWorkspaceView: View {
                 action: primeLinkComposer
             )
 
-            SpaceHeroAction(
+            WorkspaceHeroAction(
                 title: "Add Image",
                 subtitle: "Collect visual inspiration",
                 icon: "photo.on.rectangle.angled",
@@ -1373,20 +1481,20 @@ private struct SpaceWorkspaceView: View {
         }
     }
 
-    private func savedTabsCard(_ space: BrowserViewModel.Space) -> some View {
-        SpaceCard(title: "Saved Tabs", icon: "bookmark", appearance: appearance) {
-            if space.savedTabs.isEmpty {
-                SpaceEmptyState(message: "Capture tabs you want to revisit without keeping them open.")
+    private func savedTabsCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Saved Tabs", icon: "bookmark", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.savedTabs.isEmpty {
+                WorkspaceEmptyState(message: "Capture tabs you want to revisit without keeping them open.")
             } else {
                 VStack(spacing: 12) {
-                    ForEach(space.savedTabs) { saved in
-                        SpaceItemContainer(appearance: appearance) {
+                    ForEach(workspace.savedTabs) { saved in
+                        WorkspaceItemContainer(accent: workspace.accentColor, appearance: appearance) {
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(spacing: 8) {
                                     if let host = host(from: saved.url) {
-                                        SpaceBadge(text: host, icon: "globe", appearance: appearance)
+                                        WorkspaceBadge(text: host, icon: "globe", appearance: appearance)
                                     }
-                                    SpaceBadge(text: "Saved Tab", icon: "bookmark.fill", appearance: appearance)
+                                    WorkspaceBadge(text: "Saved Tab", icon: "bookmark.fill", appearance: appearance)
                                 }
 
                                 Text(saved.title)
@@ -1408,13 +1516,13 @@ private struct SpaceWorkspaceView: View {
 
                             VStack(spacing: 8) {
                                 Button("Open") {
-                                    viewModel.openSavedTab(spaceID: spaceID, savedID: saved.id)
+                                    viewModel.openSavedTab(workspaceID: workspaceID, savedID: saved.id)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(saved.url == nil)
 
                                 Button(role: .destructive) {
-                                    viewModel.removeSavedTab(in: spaceID, savedID: saved.id)
+                                    viewModel.removeSavedTab(in: workspaceID, savedID: saved.id)
                                 } label: {
                                     Label("Remove", systemImage: "trash")
                                 }
@@ -1428,7 +1536,7 @@ private struct SpaceWorkspaceView: View {
             Divider().padding(.vertical, 4)
 
             Button {
-                viewModel.saveCurrentTab(to: spaceID)
+                viewModel.saveCurrentTab(to: workspaceID)
             } label: {
                 Label("Save Current Tab", systemImage: "bookmark")
                     .font(.subheadline.weight(.semibold))
@@ -1439,14 +1547,14 @@ private struct SpaceWorkspaceView: View {
         }
     }
 
-    private func notesCard(_ space: BrowserViewModel.Space) -> some View {
-        SpaceCard(title: "Notes", icon: "highlighter", appearance: appearance) {
-            if space.notes.isEmpty {
-                SpaceEmptyState(message: "Capture sparks, next steps, or quick reminders.")
+    private func notesCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Notes", icon: "highlighter", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.notes.isEmpty {
+                WorkspaceEmptyState(message: "Capture sparks, next steps, or quick reminders.")
             } else {
                 VStack(spacing: 12) {
-                    ForEach(space.notes) { note in
-                        SpaceItemContainer(appearance: appearance) {
+                    ForEach(workspace.notes) { note in
+                        WorkspaceItemContainer(accent: workspace.accentColor, appearance: appearance) {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(note.text)
                                     .font(.body)
@@ -1458,7 +1566,7 @@ private struct SpaceWorkspaceView: View {
                             }
 
                             Button(role: .destructive) {
-                                viewModel.removeNote(in: spaceID, noteID: note.id)
+                                viewModel.removeNote(in: workspaceID, noteID: note.id)
                             } label: {
                                 Image(systemName: "trash")
                             }
@@ -1485,7 +1593,7 @@ private struct SpaceWorkspaceView: View {
                     .focused($isNoteFieldFocused)
 
                 Button {
-                    viewModel.addNote(to: spaceID, text: noteDraft)
+                    viewModel.addNote(to: workspaceID, text: noteDraft)
                     noteDraft = ""
                     isNoteFieldFocused = false
                 } label: {
@@ -1498,20 +1606,20 @@ private struct SpaceWorkspaceView: View {
         }
     }
 
-    private func linksCard(_ space: BrowserViewModel.Space) -> some View {
-        SpaceCard(title: "Links", icon: "link", appearance: appearance) {
-            if space.links.isEmpty {
-                SpaceEmptyState(message: "Save references, reading lists, and resources.")
+    private func linksCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Links", icon: "link", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.links.isEmpty {
+                WorkspaceEmptyState(message: "Save references, reading lists, and resources.")
             } else {
                 VStack(spacing: 12) {
-                    ForEach(space.links) { link in
-                        SpaceItemContainer(appearance: appearance) {
+                    ForEach(workspace.links) { link in
+                        WorkspaceItemContainer(accent: workspace.accentColor, appearance: appearance) {
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(spacing: 8) {
                                     if let host = host(from: link.url) {
-                                        SpaceBadge(text: host, icon: "link", appearance: appearance)
+                                        WorkspaceBadge(text: host, icon: "link", appearance: appearance)
                                     }
-                                    SpaceBadge(text: "Resource", icon: "book", appearance: appearance)
+                                    WorkspaceBadge(text: "Resource", icon: "book", appearance: appearance)
                                 }
 
                                 Text(link.displayTitle)
@@ -1533,13 +1641,13 @@ private struct SpaceWorkspaceView: View {
 
                             VStack(spacing: 8) {
                                 Button("Open") {
-                                    viewModel.openLink(spaceID: spaceID, linkID: link.id)
+                                    viewModel.openLink(workspaceID: workspaceID, linkID: link.id)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(link.url == nil)
 
                                 Button(role: .destructive) {
-                                    viewModel.removeLink(in: spaceID, linkID: link.id)
+                                    viewModel.removeLink(in: workspaceID, linkID: link.id)
                                 } label: {
                                     Label("Remove", systemImage: "trash")
                                 }
@@ -1565,7 +1673,7 @@ private struct SpaceWorkspaceView: View {
                     .focused($isLinkURLFocused)
 
                 Button {
-                    viewModel.addLink(to: spaceID, title: linkTitle, urlString: linkURL)
+                    viewModel.addLink(to: workspaceID, title: linkTitle, urlString: linkURL)
                     linkTitle = ""
                     linkURL = ""
                     isLinkURLFocused = false
@@ -1579,17 +1687,18 @@ private struct SpaceWorkspaceView: View {
         }
     }
 
-    private func imagesCard(_ space: BrowserViewModel.Space) -> some View {
-        SpaceCard(title: "Images", icon: "photo.on.rectangle", appearance: appearance) {
-            if space.images.isEmpty {
-                SpaceEmptyState(message: "Collect inspiration, mood boards, and reference art.")
+    private func imagesCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Images", icon: "photo.on.rectangle", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.images.isEmpty {
+                WorkspaceEmptyState(message: "Collect inspiration, mood boards, and reference art.")
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 12)], spacing: 12) {
-                    ForEach(space.images) { image in
-                        SpaceImageTile(
+                    ForEach(workspace.images) { image in
+                        WorkspaceImageTile(
                             image: image,
+                            accent: workspace.accentColor,
                             appearance: appearance,
-                            removeAction: { viewModel.removeImage(in: spaceID, imageID: image.id) }
+                            removeAction: { viewModel.removeImage(in: workspaceID, imageID: image.id) }
                         )
                     }
                 }
@@ -1610,7 +1719,7 @@ private struct SpaceWorkspaceView: View {
                     .textFieldStyle(.roundedBorder)
 
                 Button {
-                    viewModel.addImage(to: spaceID, urlString: imageURL, caption: imageCaption)
+                    viewModel.addImage(to: workspaceID, urlString: imageURL, caption: imageCaption)
                     imageURL = ""
                     imageCaption = ""
                     isImageURLFocused = false
@@ -1624,14 +1733,14 @@ private struct SpaceWorkspaceView: View {
         }
     }
 
-    private func metricRow(for space: BrowserViewModel.Space) -> some View {
+    private func metricRow(for workspace: BrowserViewModel.Workspace) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
-                metricChip(title: "Pinned", value: space.pinnedTabs.count, systemIcon: "pin")
-                metricChip(title: "Saved", value: space.savedTabs.count, systemIcon: "bookmark")
-                metricChip(title: "Notes", value: space.notes.count, systemIcon: "note.text")
-                metricChip(title: "Links", value: space.links.count, systemIcon: "link")
-                metricChip(title: "Images", value: space.images.count, systemIcon: "photo")
+                metricChip(title: "Pinned", value: workspace.pinnedTabs.count, systemIcon: "pin")
+                metricChip(title: "Saved", value: workspace.savedTabs.count, systemIcon: "bookmark")
+                metricChip(title: "Notes", value: workspace.notes.count, systemIcon: "note.text")
+                metricChip(title: "Links", value: workspace.links.count, systemIcon: "link")
+                metricChip(title: "Images", value: workspace.images.count, systemIcon: "photo")
             }
         }
     }
@@ -1663,12 +1772,12 @@ private struct SpaceWorkspaceView: View {
     }
 
     @ViewBuilder
-    private func iconPicker(for space: BrowserViewModel.Space) -> some View {
-        let iconName = resolvedIconName(space.iconName)
+    private func iconPicker(for workspace: BrowserViewModel.Workspace) -> some View {
+        let iconName = resolvedIconName(workspace.iconName)
         Menu {
             ForEach(iconChoices, id: \.self) { option in
                 Button {
-                    viewModel.updateSpaceIcon(spaceID, to: option)
+                    viewModel.updateWorkspaceIcon(workspaceID, to: option)
                 } label: {
                     Label(iconDisplayName(for: option), systemImage: option)
                 }
@@ -1728,7 +1837,7 @@ private struct SpaceWorkspaceView: View {
     }
 }
 
-private struct SpaceBadge: View {
+private struct WorkspaceBadge: View {
     let text: String
     let icon: String?
     let appearance: BrowserSidebarAppearance
@@ -1752,7 +1861,7 @@ private struct SpaceBadge: View {
     }
 }
 
-private struct SpaceHeroAction: View {
+private struct WorkspaceHeroAction: View {
     let title: String
     let subtitle: String
     let icon: String
@@ -1812,15 +1921,17 @@ private struct SpaceHeroAction: View {
     }
 }
 
-private struct SpaceCard<Content: View>: View {
+private struct WorkspaceCard<Content: View>: View {
     let title: String
     let icon: String
+    let accent: Color
     let appearance: BrowserSidebarAppearance
     let content: Content
 
-    init(title: String, icon: String, appearance: BrowserSidebarAppearance, @ViewBuilder content: () -> Content) {
+    init(title: String, icon: String, accent: Color, appearance: BrowserSidebarAppearance, @ViewBuilder content: () -> Content) {
         self.title = title
         self.icon = icon
+        self.accent = accent
         self.appearance = appearance
         self.content = content()
     }
@@ -1831,14 +1942,14 @@ private struct SpaceCard<Content: View>: View {
                 Image(systemName: icon)
                     .font(.system(size: 18, weight: .semibold))
                     .frame(width: 34, height: 34)
-                    .foregroundStyle(appearance.primary)
+                    .foregroundStyle(Color.white)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        appearance.controlTint.opacity(1),
-                                        appearance.controlTint.opacity(0.7)
+                                        accent.opacity(0.95),
+                                        accent.opacity(0.7)
                                     ],
                                     startPoint: .top,
                                     endPoint: .bottom
@@ -1859,8 +1970,8 @@ private struct SpaceCard<Content: View>: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            appearance.controlTint.opacity(0.78),
-                            appearance.controlTint.opacity(0.52)
+                            accent.opacity(0.28),
+                            accent.opacity(0.18)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -1869,17 +1980,19 @@ private struct SpaceCard<Content: View>: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(appearance.primary.opacity(0.08), lineWidth: 1)
+                .stroke(accent.opacity(0.45), lineWidth: 1)
         )
-        .shadow(color: appearance.primary.opacity(0.08), radius: 16, x: 0, y: 10)
+        .shadow(color: accent.opacity(0.22), radius: 16, x: 0, y: 10)
     }
 }
 
-private struct SpaceItemContainer<Content: View>: View {
+private struct WorkspaceItemContainer<Content: View>: View {
+    let accent: Color
     let appearance: BrowserSidebarAppearance
     let content: Content
 
-    init(appearance: BrowserSidebarAppearance, @ViewBuilder content: () -> Content) {
+    init(accent: Color, appearance: BrowserSidebarAppearance, @ViewBuilder content: () -> Content) {
+        self.accent = accent
         self.appearance = appearance
         self.content = content()
     }
@@ -1894,8 +2007,8 @@ private struct SpaceItemContainer<Content: View>: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            appearance.controlTint.opacity(0.98),
-                            appearance.controlTint.opacity(0.75)
+                            accent.opacity(0.22),
+                            accent.opacity(0.16)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -1904,12 +2017,12 @@ private struct SpaceItemContainer<Content: View>: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(appearance.primary.opacity(0.05), lineWidth: 1)
+                .stroke(accent.opacity(0.4), lineWidth: 1)
         )
     }
 }
 
-private struct SpaceEmptyState: View {
+private struct WorkspaceEmptyState: View {
     let message: String
 
     var body: some View {
@@ -1929,8 +2042,9 @@ private struct SpaceEmptyState: View {
     }
 }
 
-private struct SpaceImageTile: View {
-    let image: BrowserViewModel.Space.ImageResource
+private struct WorkspaceImageTile: View {
+    let image: BrowserViewModel.Workspace.ImageResource
+    let accent: Color
     let appearance: BrowserSidebarAppearance
     let removeAction: () -> Void
 
@@ -1938,7 +2052,13 @@ private struct SpaceImageTile: View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topTrailing) {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(appearance.controlTint.opacity(0.9))
+                    .fill(
+                        LinearGradient(
+                            colors: [accent.opacity(0.45), accent.opacity(0.25)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .overlay(
                         Group {
                             if let url = image.url {
@@ -1977,7 +2097,7 @@ private struct SpaceImageTile: View {
 #endif
                 .background(
                     Capsule()
-                        .fill(Color.black.opacity(0.35))
+                        .fill(accent.opacity(0.6))
                 )
                 .foregroundStyle(Color.white)
                 .padding(8)
@@ -1995,6 +2115,15 @@ private struct SpaceImageTile: View {
                     .truncationMode(.middle)
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(accent.opacity(0.18))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(accent.opacity(0.35), lineWidth: 1)
+        )
     }
 
     @ViewBuilder
