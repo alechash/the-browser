@@ -60,6 +60,79 @@ final class BrowserViewModel: NSObject, ObservableObject {
         }
     }
 
+    struct Workspace: Identifiable, Equatable {
+        struct PinnedTab: Identifiable, Equatable {
+            let id: UUID
+            var title: String
+            var url: URL?
+            var capturedAt: Date
+
+            var displayURL: String {
+                url?.absoluteString ?? ""
+            }
+        }
+
+        struct SavedTab: Identifiable, Equatable {
+            let id: UUID
+            var title: String
+            var url: URL?
+            var capturedAt: Date
+
+            var displayURL: String {
+                url?.absoluteString ?? ""
+            }
+        }
+
+        struct Note: Identifiable, Equatable {
+            let id: UUID
+            var text: String
+            var createdAt: Date
+        }
+
+        struct Link: Identifiable, Equatable {
+            let id: UUID
+            var title: String
+            var url: URL?
+            var createdAt: Date
+
+            var displayTitle: String {
+                let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+                return url?.absoluteString ?? "Untitled Link"
+            }
+        }
+
+        struct ImageResource: Identifiable, Equatable {
+            let id: UUID
+            var url: URL?
+            var caption: String
+            var createdAt: Date
+
+            var displayCaption: String {
+                caption.isEmpty ? "Saved Image" : caption
+            }
+        }
+
+        let id: UUID
+        var name: String
+        var iconName: String
+        var colorHex: String
+        var createdAt: Date
+        var pinnedTabs: [PinnedTab]
+        var savedTabs: [SavedTab]
+        var notes: [Note]
+        var links: [Link]
+        var images: [ImageResource]
+
+        var isEmpty: Bool {
+            pinnedTabs.isEmpty && savedTabs.isEmpty && notes.isEmpty && links.isEmpty && images.isEmpty
+        }
+
+        var accentColor: Color {
+            Color.fromHex(colorHex) ?? .browserAccent
+        }
+    }
+
     enum SplitOrientation: Equatable {
         case horizontal
         case vertical
@@ -102,6 +175,21 @@ final class BrowserViewModel: NSObject, ObservableObject {
             updateSidebarAppearanceForSelection()
             persistSessionIfNeeded()
             clearAddressSuggestions()
+            if selectedTabID != nil {
+                selectedWorkspaceID = nil
+            }
+        }
+    }
+    @Published var selectedWorkspaceID: UUID? {
+        didSet {
+            if selectedWorkspaceID != nil {
+                if selectedTabID != nil {
+                    selectedTabID = nil
+                } else {
+                    updateSidebarAppearanceForSelection()
+                }
+                sidebarAppearance = .default
+            }
         }
     }
     @Published var sidebarAppearance: BrowserSidebarAppearance
@@ -116,6 +204,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published private(set) var addressSuggestions: [HistoryEntry]
     @Published private(set) var isShowingAddressSuggestions: Bool
     @Published private(set) var highlightedAddressSuggestionID: UUID?
+    @Published private(set) var workspaces: [Workspace]
 
     var shouldShowProgress: Bool {
         guard let tab = currentTab, tab.kind == .web else { return false }
@@ -146,6 +235,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
         currentTab?.addressBarText ?? ""
     }
 
+    var currentTabTitle: String {
+        currentTab?.displayTitle ?? ""
+    }
+
     var currentTabExists: Bool {
         currentTab != nil
     }
@@ -167,9 +260,31 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     var activeWebViewTabIDs: [UUID] {
+        guard selectedWorkspaceID == nil else { return [] }
         let identifiers = computeActiveWebViewTabIDs()
         ensureSplitFractions(for: identifiers)
         return identifiers
+    }
+
+    var currentWorkspaceID: UUID? {
+        selectedWorkspaceID
+    }
+
+    var currentWorkspace: Workspace? {
+        guard let id = selectedWorkspaceID else { return nil }
+        return workspace(with: id)
+    }
+
+    func faviconURL(for tab: TabState) -> URL? {
+        guard tab.kind == .web else { return nil }
+        guard let targetURL = resolvedURL(for: tab.id, tab: tab) ?? tab.currentURL else {
+            return nil
+        }
+        guard let host = targetURL.host else { return nil }
+
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let encodedHost = host.addingPercentEncoding(withAllowedCharacters: allowed) ?? host
+        return URL(string: "https://www.google.com/s2/favicons?domain=\(encodedHost)&sz=64")
     }
 
     private let settings: BrowserSettings
@@ -177,6 +292,30 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private static let sessionStorageKey = "browser.session.state"
     private static let historyStorageKey = "browser.history.entries"
     private static let historyLimit = 500
+    private static let workspaceIconPool = [
+        "sparkles",
+        "paintpalette",
+        "lightbulb",
+        "globe",
+        "book",
+        "cube.transparent",
+        "paperplane",
+        "folder",
+        "leaf",
+        "puzzlepiece"
+    ]
+    private static let workspaceColorPool = [
+        "#6366F1",
+        "#F97316",
+        "#10B981",
+        "#EC4899",
+        "#0EA5E9",
+        "#F59E0B",
+        "#8B5CF6",
+        "#14B8A6",
+        "#EF4444",
+        "#22C55E"
+    ]
 #if os(macOS)
     private static let modernUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 #else
@@ -222,8 +361,34 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.addressSuggestions = []
         self.isShowingAddressSuggestions = false
         self.highlightedAddressSuggestionID = nil
+        self.workspaces = [
+            Workspace(
+                id: UUID(),
+                name: "The Browser",
+                iconName: BrowserViewModel.randomWorkspaceIcon(),
+                colorHex: BrowserViewModel.randomWorkspaceColor(),
+                createdAt: Date(),
+                pinnedTabs: [],
+                savedTabs: [],
+                notes: [
+                    Workspace.Note(id: UUID(), text: "Capture sparks of inspiration and return when you're ready to build.", createdAt: Date())
+                ],
+                links: [],
+                images: []
+            )
+        ]
+        self.selectedWorkspaceID = nil
+
         super.init()
         restorePreviousSessionIfNeeded()
+    }
+
+    static func randomWorkspaceIcon() -> String {
+        workspaceIconPool.randomElement() ?? "folder"
+    }
+
+    static func randomWorkspaceColor() -> String {
+        workspaceColorPool.randomElement() ?? "#3B82F6"
     }
 
     deinit {
@@ -276,6 +441,220 @@ final class BrowserViewModel: NSObject, ObservableObject {
         if let entry = downloadIDs.first(where: { $0.value == id }) {
             downloadIDs.removeValue(forKey: entry.key)
         }
+    }
+
+    // MARK: - Workspaces
+
+    func workspace(with id: UUID) -> Workspace? {
+        workspaces.first(where: { $0.id == id })
+    }
+
+    func createWorkspace(title: String = "New Workspace") {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? "Untitled Workspace" : trimmed
+        let workspace = Workspace(
+            id: UUID(),
+            name: name,
+            iconName: BrowserViewModel.randomWorkspaceIcon(),
+            colorHex: BrowserViewModel.randomWorkspaceColor(),
+            createdAt: Date(),
+            pinnedTabs: [],
+            savedTabs: [],
+            notes: [],
+            links: [],
+            images: []
+        )
+        workspaces.insert(workspace, at: 0)
+        selectedWorkspaceID = workspace.id
+    }
+
+    func deleteWorkspace(_ id: UUID) {
+        if let index = workspaces.firstIndex(where: { $0.id == id }) {
+            workspaces.remove(at: index)
+        }
+        if selectedWorkspaceID == id {
+            selectedWorkspaceID = nil
+        }
+    }
+
+    func renameWorkspace(_ id: UUID, to name: String) {
+        updateWorkspace(id) { workspace in
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            workspace.name = trimmed.isEmpty ? workspace.name : trimmed
+        }
+    }
+
+    func updateWorkspaceIcon(_ id: UUID, to iconName: String) {
+        updateWorkspace(id) { workspace in
+            let trimmed = iconName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            workspace.iconName = trimmed
+        }
+    }
+
+    func selectWorkspace(_ id: UUID) {
+        guard workspaces.contains(where: { $0.id == id }) else { return }
+        selectedWorkspaceID = id
+    }
+
+    func isWorkspaceSelected(_ id: UUID) -> Bool {
+        selectedWorkspaceID == id
+    }
+
+    func clearWorkspaceSelection() {
+        selectedWorkspaceID = nil
+    }
+
+    func pinCurrentTab(in workspaceID: UUID) {
+        guard let tab = currentTab else { return }
+        let pinned = Workspace.PinnedTab(
+            id: UUID(),
+            title: tab.title,
+            url: tab.currentURL ?? URL(string: tab.addressBarText.trimmingCharacters(in: .whitespacesAndNewlines)),
+            capturedAt: Date()
+        )
+        updateWorkspace(workspaceID) { workspace in
+            if !workspace.pinnedTabs.contains(where: { $0.url == pinned.url && $0.title == pinned.title }) {
+                workspace.pinnedTabs.insert(pinned, at: 0)
+            }
+        }
+    }
+
+    func saveCurrentTab(to workspaceID: UUID) {
+        guard let tabID = selectedTabID else { return }
+        saveTab(tabID, to: workspaceID)
+    }
+
+    func saveTab(_ tabID: UUID, to workspaceID: UUID) {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        let tab = tabs[tabIndex]
+        guard tab.kind == .web else { return }
+        let saved = Workspace.SavedTab(
+            id: UUID(),
+            title: tab.displayTitle,
+            url: resolvedURL(for: tabID, tab: tab),
+            capturedAt: Date()
+        )
+
+        updateWorkspace(workspaceID) { workspace in
+            if !workspace.savedTabs.contains(where: { existing in
+                existing.title == saved.title && existing.url == saved.url
+            }) {
+                workspace.savedTabs.insert(saved, at: 0)
+            }
+        }
+    }
+
+    func removePinnedTab(in workspaceID: UUID, pinnedID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.pinnedTabs.firstIndex(where: { $0.id == pinnedID }) {
+                workspace.pinnedTabs.remove(at: index)
+            }
+        }
+    }
+
+    func openPinnedTab(workspaceID: UUID, pinnedID: UUID) {
+        guard let workspace = workspace(with: workspaceID),
+              let pinned = workspace.pinnedTabs.first(where: { $0.id == pinnedID }),
+              let url = pinned.url
+        else { return }
+        openNewTab(with: url)
+    }
+
+    func removeSavedTab(in workspaceID: UUID, savedID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.savedTabs.firstIndex(where: { $0.id == savedID }) {
+                workspace.savedTabs.remove(at: index)
+            }
+        }
+    }
+
+    func openSavedTab(workspaceID: UUID, savedID: UUID) {
+        guard let workspace = workspace(with: workspaceID),
+              let saved = workspace.savedTabs.first(where: { $0.id == savedID }),
+              let url = saved.url
+        else { return }
+        openNewTab(with: url)
+    }
+
+    func addNote(to workspaceID: UUID, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let note = Workspace.Note(id: UUID(), text: trimmed, createdAt: Date())
+        updateWorkspace(workspaceID) { workspace in
+            workspace.notes.insert(note, at: 0)
+        }
+    }
+
+    func removeNote(in workspaceID: UUID, noteID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.notes.firstIndex(where: { $0.id == noteID }) {
+                workspace.notes.remove(at: index)
+            }
+        }
+    }
+
+    func addLink(to workspaceID: UUID, title: String, urlString: String) {
+        let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty else { return }
+        let link = Workspace.Link(
+            id: UUID(),
+            title: title,
+            url: URL(string: trimmedURL),
+            createdAt: Date()
+        )
+        updateWorkspace(workspaceID) { workspace in
+            workspace.links.insert(link, at: 0)
+        }
+    }
+
+    func removeLink(in workspaceID: UUID, linkID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.links.firstIndex(where: { $0.id == linkID }) {
+                workspace.links.remove(at: index)
+            }
+        }
+    }
+
+    func openLink(workspaceID: UUID, linkID: UUID) {
+        guard let workspace = workspace(with: workspaceID),
+              let link = workspace.links.first(where: { $0.id == linkID }),
+              let url = link.url
+        else { return }
+        openNewTab(with: url)
+    }
+
+    func addImage(to workspaceID: UUID, urlString: String, caption: String) {
+        let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty, let url = URL(string: trimmedURL) else { return }
+        addImage(to: workspaceID, url: url, caption: caption)
+    }
+
+    func addImage(to workspaceID: UUID, url: URL, caption: String = "") {
+        let resource = Workspace.ImageResource(
+            id: UUID(),
+            url: url,
+            caption: caption,
+            createdAt: Date()
+        )
+        updateWorkspace(workspaceID) { workspace in
+            if !workspace.images.contains(where: { $0.url == resource.url }) {
+                workspace.images.insert(resource, at: 0)
+            }
+        }
+    }
+
+    func removeImage(in workspaceID: UUID, imageID: UUID) {
+        updateWorkspace(workspaceID) { workspace in
+            if let index = workspace.images.firstIndex(where: { $0.id == imageID }) {
+                workspace.images.remove(at: index)
+            }
+        }
+    }
+
+    private func updateWorkspace(_ id: UUID, _ update: (inout Workspace) -> Void) {
+        guard let index = workspaces.firstIndex(where: { $0.id == id }) else { return }
+        update(&workspaces[index])
     }
 
     func handleIncomingURL(_ url: URL) {
@@ -954,6 +1333,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     private func configureWebView(_ webView: WKWebView, for tabID: UUID) {
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webViewToTabID[ObjectIdentifier(webView)] = tabID
 #if os(macOS) || os(iOS)
@@ -1586,6 +1966,59 @@ extension BrowserViewModel {
 
         return URL(string: "https://\(input)")
     }
+}
+
+extension BrowserViewModel: WKUIDelegate {
+#if os(macOS)
+    @available(macOS 12.0, *)
+    func webView(_ webView: WKWebView, contextMenuItemsForElement elementInfo: WKContextMenuElementInfo, defaultMenuItems: [WKContextMenuItem]) -> [WKContextMenuItem] {
+        guard let imageURL = elementInfo.imageURL else {
+            return defaultMenuItems
+        }
+
+        guard !workspaces.isEmpty else { return defaultMenuItems }
+
+        var items = defaultMenuItems
+        let additions = workspaces.map { workspace in
+            WKContextMenuItem(title: "Save Image to \(workspace.name)") { [weak self] in
+                self?.addImage(to: workspace.id, url: imageURL)
+            }
+        }
+
+        if !additions.isEmpty {
+            items.append(WKContextMenuItem.separator())
+            items.append(contentsOf: additions)
+        }
+
+        return items
+    }
+
+#endif
+
+#if os(iOS)
+    func webView(_ webView: WKWebView, contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo, completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
+        guard let imageURL = elementInfo.imageURL, !workspaces.isEmpty else {
+            completionHandler(nil)
+            return
+        }
+
+        completionHandler(UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { suggested in
+            let actions = self.workspaces.map { workspace in
+                let icon = UIImage(systemName: workspace.iconName) ?? UIImage(systemName: "folder")
+                return UIAction(title: "Save to \(workspace.name)", image: icon) { _ in
+                    self.addImage(to: workspace.id, url: imageURL)
+                }
+            }
+
+            let spaceMenu = UIMenu(title: "Save Image to Workspace", options: .displayInline, children: actions)
+            if let suggested {
+                return UIMenu(children: [spaceMenu] + suggested.children)
+            } else {
+                return UIMenu(children: [spaceMenu])
+            }
+        })
+    }
+#endif
 }
 
 extension BrowserViewModel: WKNavigationDelegate {

@@ -26,7 +26,9 @@ struct BrowserView: View {
         let currentTabKind = viewModel.currentTabKind
         ZStack(alignment: .leading) {
             Group {
-                if currentTabKind == .history {
+                if let workspaceID = viewModel.currentWorkspaceID {
+                    WorkspaceDetailView(viewModel: viewModel, workspaceID: workspaceID, appearance: viewModel.sidebarAppearance)
+                } else if currentTabKind == .history {
                     HistoryView(viewModel: viewModel)
                 } else if activeWebTabs.isEmpty {
                     DefaultHomeView(
@@ -323,6 +325,9 @@ private struct BrowserSidebar: View {
     let addressFieldController: AddressFieldController
     @State private var isInteractingWithAddressSuggestions = false
 #endif
+    @State private var isCreatingWorkspace = false
+    @State private var newWorkspaceName: String = ""
+    @FocusState private var isWorkspaceCreationFieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -373,7 +378,23 @@ private struct BrowserSidebar: View {
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .foregroundStyle(appearance.primary)
-    .liquidGlassBackground(tint: appearance.background, cornerRadius: 0, includeShadow: false)
+    .background(
+        LinearGradient(
+            colors: [
+                Color.browserSidebarBackground.opacity(0.98),
+                Color.browserSidebarBackground.opacity(0.9)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    )
+    .overlay(
+        Rectangle()
+            .fill(Color.black.opacity(0.12))
+            .frame(width: 1)
+            .frame(maxHeight: .infinity),
+        alignment: .trailing
+    )
     }
 
     private var header: some View {
@@ -383,24 +404,74 @@ private struct BrowserSidebar: View {
 #endif
 
             HStack(spacing: 12) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 18, weight: .heavy))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        Circle()
-                            .fill(Color.browserAccent)
-                            .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 6)
-                    )
+                workspaceGlyph
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("The Browser")
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(appearance.primary)
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Workspace")
                         .font(.caption)
                         .foregroundStyle(appearance.secondary)
+
+                    Menu {
+                        ForEach(viewModel.workspaces) { workspace in
+                            Button {
+                                viewModel.selectWorkspace(workspace.id)
+                            } label: {
+                                HStack {
+                                    Label(workspace.name, systemImage: workspace.iconName)
+                                    if viewModel.isWorkspaceSelected(workspace.id) {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+
+                        if viewModel.currentWorkspaceID != nil {
+                            if !viewModel.workspaces.isEmpty {
+                                Divider()
+                            }
+                            Button {
+                                viewModel.clearWorkspaceSelection()
+                            } label: {
+                                Label("Close Workspace", systemImage: "xmark.circle")
+                            }
+                        }
+
+                        if viewModel.currentWorkspaceID != nil || !viewModel.workspaces.isEmpty {
+                            Divider()
+                        }
+
+                        Button {
+                            if isCreatingWorkspace {
+                                cancelNewWorkspace()
+                            } else {
+                                toggleWorkspaceCreation()
+                            }
+                        } label: {
+                            Label(isCreatingWorkspace ? "Cancel New Workspace" : "New Workspace", systemImage: isCreatingWorkspace ? "xmark" : "plus")
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text(activeWorkspace?.name ?? "Select Workspace")
+                                .font(.headline)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(appearance.primary)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(appearance.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(workspaceAccent.opacity(0.22))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(workspaceAccent.opacity(0.45), lineWidth: 1)
+                        )
+                    }
+                    .menuStyle(.borderlessButton)
                 }
             }
         }
@@ -700,7 +771,129 @@ private struct BrowserSidebar: View {
         }
     }
 
+    private var activeWorkspace: BrowserViewModel.Workspace? {
+        viewModel.currentWorkspace ?? viewModel.workspaces.first
+    }
+
+    private var workspaceAccent: Color {
+        activeWorkspace?.accentColor ?? appearance.controlTint
+    }
+
+    private var workspaceGlyph: some View {
+        let iconName = activeWorkspace?.iconName ?? "sparkles"
+        return Image(systemName: iconName)
+            .font(.system(size: 18, weight: .heavy))
+            .foregroundStyle(Color.white)
+            .frame(width: 44, height: 44)
+            .background(
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                workspaceAccent.opacity(0.95),
+                                workspaceAccent.opacity(0.7)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .shadow(color: workspaceAccent.opacity(0.35), radius: 12, x: 0, y: 8)
+            )
+    }
+
     private var tabList: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            workspacesSection
+            tabsSection
+        }
+    }
+
+    private var workspacesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Text("Workspaces")
+                    .font(.caption)
+                    .foregroundStyle(appearance.secondary)
+                Spacer()
+                Button(action: toggleWorkspaceCreation) {
+                    Image(systemName: isCreatingWorkspace ? "xmark" : "plus.folder")
+                        .font(.system(size: 14, weight: .bold))
+                        .frame(width: 28, height: 28)
+                        .foregroundStyle(appearance.primary)
+                }
+                .buttonStyle(.plain)
+                .liquidGlassBackground(tint: appearance.controlTint, cornerRadius: 14, includeShadow: false)
+#if os(macOS)
+                .help(isCreatingWorkspace ? "Cancel" : "Create Workspace")
+#endif
+            }
+
+            if isCreatingWorkspace {
+                WorkspaceCreationRow(
+                    name: $newWorkspaceName,
+                    appearance: appearance,
+                    isFieldFocused: $isWorkspaceCreationFieldFocused,
+                    commitAction: commitNewWorkspace,
+                    cancelAction: cancelNewWorkspace
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            if viewModel.workspaces.isEmpty {
+                Text("Workspaces are where ideas get room to breathe. Create one to start collecting inspiration.")
+                    .font(.footnote)
+                    .foregroundStyle(appearance.secondary)
+                    .padding(.horizontal, 6)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(viewModel.workspaces) { workspace in
+                        WorkspaceRow(
+                            workspace: workspace,
+                            isSelected: viewModel.isWorkspaceSelected(workspace.id),
+                            appearance: appearance,
+                            selectAction: { viewModel.selectWorkspace(workspace.id) },
+                            pinAction: { viewModel.pinCurrentTab(in: workspace.id) },
+                            deleteAction: { viewModel.deleteWorkspace(workspace.id) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func toggleWorkspaceCreation() {
+        if isCreatingWorkspace {
+            cancelNewWorkspace()
+        } else {
+            newWorkspaceName = ""
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isCreatingWorkspace = true
+            }
+            DispatchQueue.main.async {
+                isWorkspaceCreationFieldFocused = true
+            }
+        }
+    }
+
+    private func commitNewWorkspace() {
+        let trimmed = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        viewModel.createWorkspace(title: trimmed.isEmpty ? "New Workspace" : trimmed)
+        newWorkspaceName = ""
+        isWorkspaceCreationFieldFocused = false
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isCreatingWorkspace = false
+        }
+    }
+
+    private func cancelNewWorkspace() {
+        newWorkspaceName = ""
+        isWorkspaceCreationFieldFocused = false
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isCreatingWorkspace = false
+        }
+    }
+
+    private var tabsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Text("Tabs")
@@ -740,6 +933,7 @@ private struct BrowserSidebar: View {
                             appearance: appearance,
                             selectAction: { viewModel.selectTab(tab.id) },
                             closeAction: { viewModel.closeTab(tab.id) },
+                            faviconURL: viewModel.faviconURL(for: tab),
                             isInSplitView: viewModel.isTabInSplitView(tab.id),
                             canShowInSplitView: viewModel.canShowTabInSplitView(tab.id),
                             toggleSplitAction: { viewModel.toggleSplitView(for: tab.id) },
@@ -748,6 +942,9 @@ private struct BrowserSidebar: View {
                             canPopOut: viewModel.canPopOutTab(tab.id),
                             togglePopOutAction: { viewModel.togglePopOut(for: tab.id) }
                         )
+                        .contextMenu {
+                            workspacesContextMenu(for: tab)
+                        }
 #else
                         TabRow(
                             tab: tab,
@@ -755,15 +952,40 @@ private struct BrowserSidebar: View {
                             appearance: appearance,
                             selectAction: { viewModel.selectTab(tab.id) },
                             closeAction: { viewModel.closeTab(tab.id) },
+                            faviconURL: viewModel.faviconURL(for: tab),
                             isInSplitView: viewModel.isTabInSplitView(tab.id),
                             canShowInSplitView: viewModel.canShowTabInSplitView(tab.id),
                             toggleSplitAction: { viewModel.toggleSplitView(for: tab.id) },
                             splitOrientation: viewModel.splitViewOrientation
                         )
+                        .contextMenu {
+                            workspacesContextMenu(for: tab)
+                        }
 #endif
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func workspacesContextMenu(for tab: BrowserViewModel.TabState) -> some View {
+        if tab.kind != .web {
+            Label("Only web tabs can be saved", systemImage: "exclamationmark.triangle")
+                .disabled(true)
+        } else if viewModel.workspaces.isEmpty {
+            Label("Create a workspace to save tabs", systemImage: "folder.badge.plus")
+                .disabled(true)
+        } else {
+            Section("Save Tab to Workspace") {
+                ForEach(viewModel.workspaces) { workspace in
+                    Button {
+                        viewModel.saveTab(tab.id, to: workspace.id)
+                    } label: {
+                        Label(workspace.name, systemImage: workspace.iconName)
+                    }
+                }
             }
         }
     }
@@ -782,6 +1004,1148 @@ private struct BrowserSidebar: View {
 #if os(macOS)
         .help(help)
 #endif
+    }
+}
+
+private struct WorkspaceCreationRow: View {
+    @Binding var name: String
+    let appearance: BrowserSidebarAppearance
+    var isFieldFocused: FocusState<Bool>.Binding
+    let commitAction: () -> Void
+    let cancelAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("New Workspace")
+                .font(.caption)
+                .foregroundStyle(appearance.secondary)
+
+            HStack(spacing: 10) {
+                TextField("Creative Hub", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .focused(isFieldFocused)
+                    .onSubmit(commitAction)
+
+                Button(action: commitAction) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 28, height: 28)
+                        .foregroundStyle(appearance.primary)
+                }
+                .buttonStyle(.plain)
+                .liquidGlassBackground(tint: appearance.controlTint.opacity(0.95), cornerRadius: 14, includeShadow: false)
+
+                Button(action: cancelAction) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 28, height: 28)
+                        .foregroundStyle(appearance.primary)
+                }
+                .buttonStyle(.plain)
+                .liquidGlassBackground(tint: appearance.controlTint.opacity(0.65), cornerRadius: 14, includeShadow: false)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(appearance.controlTint.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(appearance.primary.opacity(0.15), lineWidth: 1)
+        )
+    }
+}
+
+private struct WorkspaceRow: View {
+    let workspace: BrowserViewModel.Workspace
+    let isSelected: Bool
+    let appearance: BrowserSidebarAppearance
+    let selectAction: () -> Void
+    let pinAction: () -> Void
+    let deleteAction: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: resolvedIconName)
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 32, height: 32)
+                .foregroundStyle(Color.white)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    workspace.accentColor.opacity(0.95),
+                                    workspace.accentColor.opacity(0.7)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(workspace.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(appearance.primary)
+
+                Text(summaryText)
+                    .font(.caption2)
+                    .foregroundStyle(appearance.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            HStack(spacing: 8) {
+                Button(action: pinAction) {
+                    Image(systemName: "pin")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(appearance.primary)
+                }
+                .buttonStyle(.plain)
+                .liquidGlassBackground(tint: appearance.controlTint.opacity(0.85), cornerRadius: 10, includeShadow: false)
+#if os(macOS)
+                .help("Pin Current Tab to Workspace")
+#endif
+
+                Button(role: .destructive, action: deleteAction) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(appearance.primary)
+                }
+                .buttonStyle(.plain)
+                .liquidGlassBackground(tint: appearance.controlTint.opacity(0.75), cornerRadius: 10, includeShadow: false)
+#if os(macOS)
+                .help("Delete Workspace")
+#endif
+            }
+            .opacity(workspace.isEmpty ? 0.85 : 1)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(workspace.accentColor.opacity(isSelected ? 0.24 : 0.14))
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .opacity(isSelected ? 1 : 0.92)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(workspace.accentColor.opacity(isSelected ? 0.6 : 0), lineWidth: 1.5)
+        )
+        .onTapGesture(perform: selectAction)
+    }
+
+    private var summaryText: String {
+        var parts: [String] = []
+        if !workspace.pinnedTabs.isEmpty {
+            parts.append("\(workspace.pinnedTabs.count) pinned tab\(workspace.pinnedTabs.count == 1 ? "" : "s")")
+        }
+        if !workspace.savedTabs.isEmpty {
+            parts.append("\(workspace.savedTabs.count) saved tab\(workspace.savedTabs.count == 1 ? "" : "s")")
+        }
+        if !workspace.notes.isEmpty {
+            parts.append("\(workspace.notes.count) note\(workspace.notes.count == 1 ? "" : "s")")
+        }
+        if !workspace.links.isEmpty {
+            parts.append("\(workspace.links.count) link\(workspace.links.count == 1 ? "" : "s")")
+        }
+        if !workspace.images.isEmpty {
+            parts.append("\(workspace.images.count) image\(workspace.images.count == 1 ? "" : "s")")
+        }
+        if parts.isEmpty {
+            return "An open canvas for creativity"
+        }
+        return parts.joined(separator: " • ")
+    }
+
+    private var resolvedIconName: String {
+        let trimmed = workspace.iconName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "folder" : trimmed
+    }
+}
+
+private struct WorkspaceDetailView: View {
+    @ObservedObject var viewModel: BrowserViewModel
+    let workspaceID: UUID
+    let appearance: BrowserSidebarAppearance
+    @State private var noteDraft: String = ""
+    @State private var linkTitle: String = ""
+    @State private var linkURL: String = ""
+    @State private var imageURL: String = ""
+    @State private var imageCaption: String = ""
+    @FocusState private var isNoteFieldFocused: Bool
+    @FocusState private var isLinkURLFocused: Bool
+    @FocusState private var isImageURLFocused: Bool
+
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: 320, maximum: 420), spacing: 24)]
+    }
+
+    private var heroColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 14)]
+    }
+
+    private var workspace: BrowserViewModel.Workspace? {
+        viewModel.workspace(with: workspaceID)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 32) {
+                header
+                if let workspace {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
+                        pinnedTabsCard(workspace)
+                        savedTabsCard(workspace)
+                        notesCard(workspace)
+                        linksCard(workspace)
+                        imagesCard(workspace)
+                    }
+                } else {
+                    spaceUnavailable
+                }
+            }
+            .padding(.horizontal, 40)
+            .padding(.vertical, 48)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .background(Color.browserBackground)
+    }
+
+    private var header: some View {
+        Group {
+            if let workspace {
+                VStack(alignment: .leading, spacing: 28) {
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 34, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        workspace.accentColor.opacity(0.95),
+                                        workspace.accentColor.opacity(0.55)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 34, style: .continuous)
+                                    .stroke(Color.white.opacity(0.25), lineWidth: 1.2)
+                            )
+
+                        VStack(alignment: .leading, spacing: 24) {
+                            HStack(alignment: .top, spacing: 22) {
+                                iconPicker(for: workspace)
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    TextField(
+                                        "Workspace Name",
+                                        text: Binding(
+                                            get: { workspace.name },
+                                            set: { viewModel.renameWorkspace(workspaceID, to: $0) }
+                                        )
+                                    )
+                                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                                    .textFieldStyle(.plain)
+                                    .foregroundStyle(appearance.primary)
+
+                                    HStack(spacing: 10) {
+                                        WorkspaceBadge(text: formatted(date: workspace.createdAt), icon: "calendar", appearance: appearance)
+                                        if workspace.isEmpty {
+                                            WorkspaceBadge(text: "Fresh Canvas", icon: "sparkles", appearance: appearance)
+                                        }
+                                    }
+                                }
+
+                                Spacer(minLength: 0)
+
+                                Menu {
+                                    Button(role: .destructive) {
+                                        viewModel.deleteWorkspace(workspaceID)
+                                    } label: {
+                                        Label("Delete Workspace", systemImage: "trash")
+                                    }
+                                } label: {
+                                    Label("Manage Workspace", systemImage: "ellipsis.circle")
+                                        .labelStyle(.iconOnly)
+                                        .font(.system(size: 24, weight: .semibold))
+                                        .frame(width: 52, height: 52)
+                                        .foregroundStyle(appearance.primary)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                                .fill(Color.white.opacity(0.18))
+                                        )
+                                }
+                                .menuStyle(.borderlessButton)
+#if os(macOS)
+                                .help("Workspace Actions")
+#endif
+                            }
+
+                            metricRow(for: workspace)
+
+                            heroActions(for: workspace)
+                        }
+                        .padding(32)
+                    }
+                    .shadow(color: workspace.accentColor.opacity(0.25), radius: 24, x: 0, y: 18)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Icon (SF Symbol)")
+                            .font(.caption)
+                            .foregroundStyle(appearance.secondary.opacity(0.85))
+
+                        TextField(
+                            "folder",
+                            text: Binding(
+                                get: { workspace.iconName },
+                                set: { viewModel.updateWorkspaceIcon(workspaceID, to: $0) }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
+                    }
+                }
+            } else {
+                workspaceUnavailable
+            }
+        }
+    }
+
+    private var workspaceUnavailable: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Workspace Unavailable")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(appearance.primary)
+            Text("This workspace could not be found. It may have been removed or is still loading.")
+                .font(.callout)
+                .foregroundStyle(appearance.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(32)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(appearance.controlTint.opacity(0.6))
+        )
+    }
+
+    private func pinnedTabsCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Pinned Tabs", icon: "pin", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.pinnedTabs.isEmpty {
+                WorkspaceEmptyState(
+                    message: "No pinned tabs yet. Pin pages you want quick access to."
+                )
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(workspace.pinnedTabs) { pinned in
+                        WorkspaceItemContainer(accent: workspace.accentColor, appearance: appearance) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(pinned.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(appearance.primary)
+                                if let url = pinned.url {
+                                    Text(url.absoluteString)
+                                        .font(.caption2)
+                                        .foregroundStyle(appearance.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+
+                            Spacer(minLength: 12)
+
+                            VStack(spacing: 8) {
+                                Button("Open") {
+                                    viewModel.openPinnedTab(workspaceID: workspaceID, pinnedID: pinned.id)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(pinned.url == nil)
+
+                                Button(role: .destructive) {
+                                    viewModel.removePinnedTab(in: workspaceID, pinnedID: pinned.id)
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            Button {
+                viewModel.pinCurrentTab(in: workspaceID)
+            } label: {
+                Label("Pin Current Tab", systemImage: "pin")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(!viewModel.currentTabExists)
+        }
+    }
+
+    private func heroActions(for workspace: BrowserViewModel.Workspace) -> some View {
+        LazyVGrid(columns: heroColumns, alignment: .leading, spacing: 14) {
+            WorkspaceHeroAction(
+                title: "Pin Current Tab",
+                subtitle: "Keep essentials a tap away",
+                icon: "pin",
+                tint: Color.blue,
+                appearance: appearance,
+                isDisabled: !viewModel.currentTabExists,
+                action: { viewModel.pinCurrentTab(in: workspaceID) }
+            )
+
+            WorkspaceHeroAction(
+                title: "Save for Later",
+                subtitle: "Archive the current page",
+                icon: "bookmark",
+                tint: Color.purple,
+                appearance: appearance,
+                isDisabled: !viewModel.currentTabExists,
+                action: { viewModel.saveCurrentTab(to: workspaceID) }
+            )
+
+            WorkspaceHeroAction(
+                title: "Capture a Note",
+                subtitle: "Jot thoughts before they vanish",
+                icon: "square.and.pencil",
+                tint: Color.orange,
+                appearance: appearance,
+                isDisabled: false,
+                action: primeNoteComposer
+            )
+
+            WorkspaceHeroAction(
+                title: "Save a Link",
+                subtitle: "Drop in a quick reference",
+                icon: "link.badge.plus",
+                tint: Color.green,
+                appearance: appearance,
+                isDisabled: false,
+                action: primeLinkComposer
+            )
+
+            WorkspaceHeroAction(
+                title: "Add Image",
+                subtitle: "Collect visual inspiration",
+                icon: "photo.on.rectangle.angled",
+                tint: Color.pink,
+                appearance: appearance,
+                isDisabled: false,
+                action: primeImageComposer
+            )
+        }
+    }
+
+    private func primeNoteComposer() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isNoteFieldFocused = true
+        }
+    }
+
+    private func primeLinkComposer() {
+        if linkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let currentURL = viewModel.currentURL {
+            linkURL = currentURL.absoluteString
+        }
+        if linkTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let candidate = viewModel.currentTabTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !candidate.isEmpty {
+                linkTitle = candidate
+            } else if let host = viewModel.currentURL?.host {
+                linkTitle = host
+            }
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isLinkURLFocused = true
+        }
+    }
+
+    private func primeImageComposer() {
+        if imageURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let currentURL = viewModel.currentURL {
+            imageURL = currentURL.absoluteString
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isImageURLFocused = true
+        }
+    }
+
+    private func savedTabsCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Saved Tabs", icon: "bookmark", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.savedTabs.isEmpty {
+                WorkspaceEmptyState(message: "Capture tabs you want to revisit without keeping them open.")
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(workspace.savedTabs) { saved in
+                        WorkspaceItemContainer(accent: workspace.accentColor, appearance: appearance) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 8) {
+                                    if let host = host(from: saved.url) {
+                                        WorkspaceBadge(text: host, icon: "globe", appearance: appearance)
+                                    }
+                                    WorkspaceBadge(text: "Saved Tab", icon: "bookmark.fill", appearance: appearance)
+                                }
+
+                                Text(saved.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(appearance.primary)
+                                if let url = saved.url {
+                                    Text(url.absoluteString)
+                                        .font(.caption2)
+                                        .foregroundStyle(appearance.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Text("Saved \(formatted(date: saved.capturedAt))")
+                                    .font(.caption2)
+                                    .foregroundStyle(appearance.secondary.opacity(0.85))
+                            }
+
+                            Spacer(minLength: 12)
+
+                            VStack(spacing: 8) {
+                                Button("Open") {
+                                    viewModel.openSavedTab(workspaceID: workspaceID, savedID: saved.id)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(saved.url == nil)
+
+                                Button(role: .destructive) {
+                                    viewModel.removeSavedTab(in: workspaceID, savedID: saved.id)
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            Button {
+                viewModel.saveCurrentTab(to: workspaceID)
+            } label: {
+                Label("Save Current Tab", systemImage: "bookmark")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(!viewModel.currentTabExists)
+        }
+    }
+
+    private func notesCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Notes", icon: "highlighter", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.notes.isEmpty {
+                WorkspaceEmptyState(message: "Capture sparks, next steps, or quick reminders.")
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(workspace.notes) { note in
+                        WorkspaceItemContainer(accent: workspace.accentColor, appearance: appearance) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(note.text)
+                                    .font(.body)
+                                    .foregroundStyle(appearance.primary)
+                                    .multilineTextAlignment(.leading)
+                                Text(formatted(date: note.createdAt))
+                                    .font(.caption2)
+                                    .foregroundStyle(appearance.secondary.opacity(0.85))
+                            }
+
+                            Button(role: .destructive) {
+                                viewModel.removeNote(in: workspaceID, noteID: note.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("New Note")
+                    .font(.caption)
+                    .foregroundStyle(appearance.secondary.opacity(0.85))
+
+                TextEditor(text: $noteDraft)
+                    .frame(minHeight: 90)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(appearance.controlTint.opacity(0.75))
+                    )
+                    .focused($isNoteFieldFocused)
+
+                Button {
+                    viewModel.addNote(to: workspaceID, text: noteDraft)
+                    noteDraft = ""
+                    isNoteFieldFocused = false
+                } label: {
+                    Label("Save Note", systemImage: "square.and.arrow.down")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func linksCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Links", icon: "link", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.links.isEmpty {
+                WorkspaceEmptyState(message: "Save references, reading lists, and resources.")
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(workspace.links) { link in
+                        WorkspaceItemContainer(accent: workspace.accentColor, appearance: appearance) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 8) {
+                                    if let host = host(from: link.url) {
+                                        WorkspaceBadge(text: host, icon: "link", appearance: appearance)
+                                    }
+                                    WorkspaceBadge(text: "Resource", icon: "book", appearance: appearance)
+                                }
+
+                                Text(link.displayTitle)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(appearance.primary)
+                                if let url = link.url {
+                                    Text(url.absoluteString)
+                                        .font(.caption2)
+                                        .foregroundStyle(appearance.secondary)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
+                                }
+                                Text("Saved \(formatted(date: link.createdAt))")
+                                    .font(.caption2)
+                                    .foregroundStyle(appearance.secondary.opacity(0.85))
+                            }
+
+                            Spacer(minLength: 12)
+
+                            VStack(spacing: 8) {
+                                Button("Open") {
+                                    viewModel.openLink(workspaceID: workspaceID, linkID: link.id)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(link.url == nil)
+
+                                Button(role: .destructive) {
+                                    viewModel.removeLink(in: workspaceID, linkID: link.id)
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("New Link")
+                    .font(.caption)
+                    .foregroundStyle(appearance.secondary.opacity(0.85))
+
+                TextField("Title", text: $linkTitle)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("https://example.com", text: $linkURL)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isLinkURLFocused)
+
+                Button {
+                    viewModel.addLink(to: workspaceID, title: linkTitle, urlString: linkURL)
+                    linkTitle = ""
+                    linkURL = ""
+                    isLinkURLFocused = false
+                } label: {
+                    Label("Save Link", systemImage: "link")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(linkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func imagesCard(_ workspace: BrowserViewModel.Workspace) -> some View {
+        WorkspaceCard(title: "Images", icon: "photo.on.rectangle", accent: workspace.accentColor, appearance: appearance) {
+            if workspace.images.isEmpty {
+                WorkspaceEmptyState(message: "Collect inspiration, mood boards, and reference art.")
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 12)], spacing: 12) {
+                    ForEach(workspace.images) { image in
+                        WorkspaceImageTile(
+                            image: image,
+                            accent: workspace.accentColor,
+                            appearance: appearance,
+                            removeAction: { viewModel.removeImage(in: workspaceID, imageID: image.id) }
+                        )
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Add Image")
+                    .font(.caption)
+                    .foregroundStyle(appearance.secondary.opacity(0.85))
+
+                TextField("Image URL", text: $imageURL)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isImageURLFocused)
+
+                TextField("Caption", text: $imageCaption)
+                    .textFieldStyle(.roundedBorder)
+
+                Button {
+                    viewModel.addImage(to: workspaceID, urlString: imageURL, caption: imageCaption)
+                    imageURL = ""
+                    imageCaption = ""
+                    isImageURLFocused = false
+                } label: {
+                    Label("Save Image", systemImage: "photo.fill.on.rectangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(imageURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func metricRow(for workspace: BrowserViewModel.Workspace) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                metricChip(title: "Pinned", value: workspace.pinnedTabs.count, systemIcon: "pin")
+                metricChip(title: "Saved", value: workspace.savedTabs.count, systemIcon: "bookmark")
+                metricChip(title: "Notes", value: workspace.notes.count, systemIcon: "note.text")
+                metricChip(title: "Links", value: workspace.links.count, systemIcon: "link")
+                metricChip(title: "Images", value: workspace.images.count, systemIcon: "photo")
+            }
+        }
+    }
+
+    private func host(from url: URL?) -> String? {
+        guard let rawHost = url?.host, !rawHost.isEmpty else { return nil }
+        if rawHost.lowercased().hasPrefix("www.") {
+            return String(rawHost.dropFirst(4))
+        }
+        return rawHost
+    }
+
+    private func metricChip(title: String, value: Int, systemIcon: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemIcon)
+                .font(.system(size: 12, weight: .semibold))
+            Text("\(value)")
+                .font(.subheadline.weight(.semibold))
+            Text(title)
+                .font(.footnote)
+        }
+        .foregroundStyle(appearance.primary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(appearance.controlTint.opacity(0.85))
+        )
+    }
+
+    @ViewBuilder
+    private func iconPicker(for workspace: BrowserViewModel.Workspace) -> some View {
+        let iconName = resolvedIconName(workspace.iconName)
+        Menu {
+            ForEach(iconChoices, id: \.self) { option in
+                Button {
+                    viewModel.updateWorkspaceIcon(workspaceID, to: option)
+                } label: {
+                    Label(iconDisplayName(for: option), systemImage: option)
+                }
+            }
+        } label: {
+            Image(systemName: iconName)
+                .font(.system(size: 32, weight: .semibold))
+                .frame(width: 72, height: 72)
+                .foregroundStyle(appearance.primary)
+                .background(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(appearance.controlTint.opacity(0.95))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(appearance.primary.opacity(0.18), lineWidth: 1.4)
+                )
+        }
+        .menuStyle(.borderlessButton)
+#if os(macOS)
+        .help("Choose Icon")
+#endif
+    }
+
+    private var iconChoices: [String] {
+        [
+            "folder",
+            "sparkles",
+            "lightbulb",
+            "paintpalette",
+            "bookmark",
+            "camera",
+            "music.note",
+            "leaf",
+            "heart",
+            "globe",
+            "brain.head.profile"
+        ]
+    }
+
+    private func iconDisplayName(for symbol: String) -> String {
+        symbol.replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .capitalized
+    }
+
+    private func resolvedIconName(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "folder" : trimmed
+    }
+
+    private func formatted(date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+}
+
+private struct WorkspaceBadge: View {
+    let text: String
+    let icon: String?
+    let appearance: BrowserSidebarAppearance
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            Text(text)
+                .font(.caption2.weight(.semibold))
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(appearance.controlTint.opacity(0.4))
+        )
+        .foregroundStyle(appearance.primary)
+    }
+}
+
+private struct WorkspaceHeroAction: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let tint: Color
+    let appearance: BrowserSidebarAppearance
+    let isDisabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 16) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 38, height: 38)
+                    .background(
+                        Circle()
+                            .fill(appearance.primary.opacity(0.15))
+                    )
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundColor(.white)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(Color.white.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                tint.opacity(0.95),
+                                tint.opacity(0.65)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(appearance.primary.opacity(0.16), lineWidth: 1)
+            )
+            .shadow(color: tint.opacity(0.25), radius: 16, x: 0, y: 12)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.35 : 1)
+    }
+}
+
+private struct WorkspaceCard<Content: View>: View {
+    let title: String
+    let icon: String
+    let accent: Color
+    let appearance: BrowserSidebarAppearance
+    let content: Content
+
+    init(title: String, icon: String, accent: Color, appearance: BrowserSidebarAppearance, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.accent = accent
+        self.appearance = appearance
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(Color.white)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        accent.opacity(0.95),
+                                        accent.opacity(0.7)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                    )
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(appearance.primary)
+            }
+
+            content
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            accent.opacity(0.28),
+                            accent.opacity(0.18)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(accent.opacity(0.45), lineWidth: 1)
+        )
+        .shadow(color: accent.opacity(0.22), radius: 16, x: 0, y: 10)
+    }
+}
+
+private struct WorkspaceItemContainer<Content: View>: View {
+    let accent: Color
+    let appearance: BrowserSidebarAppearance
+    let content: Content
+
+    init(accent: Color, appearance: BrowserSidebarAppearance, @ViewBuilder content: () -> Content) {
+        self.accent = accent
+        self.appearance = appearance
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            content
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            accent.opacity(0.22),
+                            accent.opacity(0.16)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(accent.opacity(0.4), lineWidth: 1)
+        )
+    }
+}
+
+private struct WorkspaceEmptyState: View {
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 16, weight: .semibold))
+            Text(message)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.secondary)
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+}
+
+private struct WorkspaceImageTile: View {
+    let image: BrowserViewModel.Workspace.ImageResource
+    let accent: Color
+    let appearance: BrowserSidebarAppearance
+    let removeAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .topTrailing) {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [accent.opacity(0.45), accent.opacity(0.25)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        Group {
+                            if let url = image.url {
+                                AsyncImage(url: url) { phase in
+                                    switch phase {
+                                    case .success(let loaded):
+                                        loaded
+                                            .resizable()
+                                            .scaledToFill()
+                                    case .empty:
+                                        progressView
+                                    case .failure:
+                                        placeholder
+                                    @unknown default:
+                                        placeholder
+                                    }
+                                }
+                                .clipped()
+                            } else {
+                                placeholder
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    )
+                    .frame(height: 140)
+
+                Button(role: .destructive, action: removeAction) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(6)
+                }
+#if os(macOS)
+                .buttonStyle(.borderless)
+#else
+                .buttonStyle(.plain)
+#endif
+                .background(
+                    Capsule()
+                        .fill(accent.opacity(0.6))
+                )
+                .foregroundStyle(Color.white)
+                .padding(8)
+            }
+
+            Text(image.displayCaption)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(appearance.primary)
+
+            if let url = image.url {
+                Text(url.absoluteString)
+                    .font(.caption2)
+                    .foregroundStyle(appearance.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(accent.opacity(0.18))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(accent.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var placeholder: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.black.opacity(0.12))
+            Image(systemName: "photo")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.8))
+        }
+    }
+
+    @ViewBuilder
+    private var progressView: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.black.opacity(0.1))
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(Color.white.opacity(0.8))
+        }
     }
 }
 
@@ -873,6 +2237,7 @@ private struct TabRow: View {
     let appearance: BrowserSidebarAppearance
     let selectAction: () -> Void
     let closeAction: () -> Void
+    let faviconURL: URL?
     let isInSplitView: Bool
     let canShowInSplitView: Bool
     let toggleSplitAction: () -> Void
@@ -944,6 +2309,9 @@ private struct TabRow: View {
                     .help(isPoppedOut ? "Return to Main Window" : "Pop Out")
 #endif
 
+#if os(macOS)
+                    FaviconCloseButton(faviconURL: faviconURL, appearance: appearance, closeAction: closeAction)
+#else
                     Button(action: closeAction) {
                         Image(systemName: "xmark")
                             .font(.system(size: 10, weight: .bold))
@@ -952,6 +2320,7 @@ private struct TabRow: View {
                     }
                     .buttonStyle(.plain)
                     .opacity(0.7)
+#endif
                 }
             }
         }
@@ -977,6 +2346,66 @@ private struct TabRow: View {
         }
     }
 }
+
+#if os(macOS)
+private struct FaviconCloseButton: View {
+    let faviconURL: URL?
+    let appearance: BrowserSidebarAppearance
+    let closeAction: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: closeAction) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(appearance.controlTint.opacity(isHovering ? 0.9 : 0.75))
+
+                faviconContent
+                    .frame(width: 18, height: 18)
+            }
+            .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovering = hovering
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var faviconContent: some View {
+        if isHovering || faviconURL == nil {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(appearance.primary)
+        } else {
+            AsyncImage(url: faviconURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                case .empty, .failure:
+                    fallbackIcon()
+                @unknown default:
+                    fallbackIcon()
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private func fallbackIcon() -> some View {
+        Image(systemName: "globe")
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(appearance.primary)
+            .padding(2)
+    }
+}
+#endif
 
 private struct DownloadRow: View {
     let download: BrowserViewModel.DownloadItem
