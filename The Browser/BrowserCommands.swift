@@ -10,6 +10,9 @@ struct BrowserCommandContext {
     let reopenLastClosedTab: () -> Void
     let selectNextTab: () -> Void
     let selectPreviousTab: () -> Void
+    let goBack: () -> Void
+    let goForward: () -> Void
+    let goHome: () -> Void
     let reload: () -> Void
     let focusAddressBar: () -> Void
     let findOnPage: () -> Void
@@ -22,6 +25,9 @@ struct BrowserCommandContext {
     let canSelectPreviousTab: Bool
     let canReopenLastClosedTab: Bool
     let hasActiveTab: Bool
+    let isLoading: Bool
+    let canGoBack: Bool
+    let canGoForward: Bool
 }
 
 private struct BrowserActionsKey: FocusedValueKey {
@@ -88,7 +94,8 @@ struct BrowserCommands: Commands {
         }
 
         CommandMenu("View") {
-            Button("Reload Page") {
+            let isLoading = actions?.isLoading == true
+            Button(isLoading ? "Stop Loading" : "Reload Page") {
                 actions?.reload()
             }
             .keyboardShortcut("r", modifiers: .command)
@@ -99,7 +106,7 @@ struct BrowserCommands: Commands {
             Button("Zoom In") {
                 actions?.zoomIn()
             }
-            .keyboardShortcut("+", modifiers: .command)
+            .keyboardShortcut("=", modifiers: .command)
             .disabled(actions?.hasActiveTab != true)
 
             Button("Zoom Out") {
@@ -123,6 +130,24 @@ struct BrowserCommands: Commands {
         }
 
         CommandMenu("Navigate") {
+            Button("Back") {
+                actions?.goBack()
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .disabled(actions?.canGoBack != true)
+
+            Button("Forward") {
+                actions?.goForward()
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(actions?.canGoForward != true)
+
+            Button("Home") {
+                actions?.goHome()
+            }
+            .keyboardShortcut("h", modifiers: [.command, .shift])
+            .disabled(actions?.hasActiveTab != true)
+
             Button("Focus Address Bar") {
                 actions?.focusAddressBar()
             }
