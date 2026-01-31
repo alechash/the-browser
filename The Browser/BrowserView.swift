@@ -131,7 +131,10 @@ struct BrowserView: View {
             reopenLastClosedTab: viewModel.reopenLastClosedTab,
             selectNextTab: viewModel.selectNextTab,
             selectPreviousTab: viewModel.selectPreviousTab,
-            reload: viewModel.reloadCurrentTab,
+            goBack: viewModel.goBack,
+            goForward: viewModel.goForward,
+            goHome: viewModel.goHome,
+            reload: viewModel.reloadOrStop,
             focusAddressBar: {
                 if isWebContentFullscreen {
                     withAnimation {
@@ -165,7 +168,10 @@ struct BrowserView: View {
             canSelectNextTab: viewModel.hasMultipleTabs,
             canSelectPreviousTab: viewModel.hasMultipleTabs,
             canReopenLastClosedTab: viewModel.canReopenLastClosedTab,
-            hasActiveTab: viewModel.currentTabExists
+            hasActiveTab: viewModel.currentTabExists,
+            isLoading: viewModel.isLoading,
+            canGoBack: viewModel.canGoBack,
+            canGoForward: viewModel.canGoForward
         )
     }
 #endif
@@ -1210,4 +1216,3 @@ final class AddressFieldController: ObservableObject {
     }
 }
 #endif
-
